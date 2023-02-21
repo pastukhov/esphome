@@ -17,9 +17,10 @@ static const uint8_t TDD_SPI_WRITE = 0x0A;
 
 static const uint8_t MT_MASK = 0xE0;
 
-static const uint8_t MT_COMMAND = 0x20;   // For sending commands
-static const uint8_t MT_RESPONSE = 0x40;  // Response to commands
-static const uint8_t MT_NOTIFICATION = 0x60;
+static const uint8_t MT_DATA = 0x00;
+static const uint8_t MT_CTRL_COMMAND = 0x20;       // For sending commands
+static const uint8_t MT_CTRL_RESPONSE = 0x40;      // Response to commands
+static const uint8_t MT_CTRL_NOTIFICATION = 0x60;  // Notification from NFCC
 
 static const uint8_t GID_MASK = 0x0F;
 static const uint8_t OID_MASK = 0x3F;
@@ -125,17 +126,20 @@ static const uint8_t PROT_NFCDEP = 0x05;
 static const uint8_t PROT_ISO15693 = 0x06;
 static const uint8_t PROT_MIFARE = 0x80;
 
+static const uint8_t RF_DISCOVER_MAP_MODE_POLL = 0x1;
+static const uint8_t RF_DISCOVER_MAP_MODE_LISTEN = 0x2;
+
 static const uint8_t INTF_UNDETERMINED = 0x0;
 static const uint8_t INTF_FRAME = 0x1;
 static const uint8_t INTF_ISODEP = 0x2;
 static const uint8_t INTF_NFCDEP = 0x3;
 static const uint8_t INTF_TAGCMD = 0x80;
 
-static const uint8_t READ_WRITE_MODE[] = {PROT_T1T,    0x01, INTF_FRAME,    // Poll Mode
-                                          PROT_T2T,    0x01, INTF_FRAME,    // Poll Mode
-                                          PROT_T3T,    0x01, INTF_FRAME,    // Poll Mode
-                                          PROT_ISODEP, 0x01, INTF_ISODEP,   // Poll Mode
-                                          PROT_MIFARE, 0x01, INTF_TAGCMD};  // Poll Mode
+static const uint8_t READ_WRITE_MODE[] = {PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // Poll mode
+                                          PROT_T2T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // Poll mode
+                                          PROT_T3T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // Poll mode
+                                          PROT_ISODEP, RF_DISCOVER_MAP_MODE_POLL, INTF_ISODEP,   // Poll mode
+                                          PROT_MIFARE, RF_DISCOVER_MAP_MODE_POLL, INTF_TAGCMD};  // Poll mode
 
 static const uint8_t DISCOVERY_READ_WRITE[] = {MODE_POLL | TECH_PASSIVE_NFCA,    //
                                                MODE_POLL | TECH_PASSIVE_NFCF,    //
@@ -193,28 +197,33 @@ class PN7160 : public Component,
   void register_ontag_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontag_.push_back(trig); }
 
  protected:
-  bool write_and_read_(uint8_t gid, uint8_t oid, const std::vector<uint8_t> &data, std::vector<uint8_t> &response,
-                       uint16_t timeout = 5, bool warn = true);
-  bool write_and_read_(uint8_t gid, uint8_t oid, const uint8_t *data, const uint8_t len, std::vector<uint8_t> &response,
-                       uint16_t timeout = 5, bool warn = true);
+  /// advance controller state as required
+  void nci_fsm_transition_();
+
+  bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const std::vector<uint8_t> &data, std::vector<uint8_t> &response,
+                            uint16_t timeout = 5, bool warn = true);
+  bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const uint8_t *data, const uint8_t len,
+                            std::vector<uint8_t> &response, uint16_t timeout = 5, bool warn = true);
+  bool write_data_and_read_(std::vector<uint8_t> &data, std::vector<uint8_t> &response, uint16_t timeout = 5,
+                            bool warn = true);
+  bool write_and_read_(std::vector<uint8_t> &data, std::vector<uint8_t> &response, uint16_t timeout, bool warn);
   bool write_data_(const std::vector<uint8_t> &data);
   bool read_data_(std::vector<uint8_t> &data, uint16_t timeout = 5, bool warn = true);
-  bool wait_for_irq_(uint16_t timeout = 5, bool warn = true);
+  bool wait_for_irq_(uint16_t timeout = 5, bool state = true, bool warn = true);
 
-  bool reset_core_(bool reset_config, bool power);
-  bool init_core_(std::vector<uint8_t> &data, PN7160State next_state = PN7160State::CONFIG);
-  bool send_config_();
+  uint8_t reset_core_(bool reset_config, bool power);
+  uint8_t init_core_(bool store_report);
+  uint8_t send_config_();
 
-  bool set_mode_(PN7160Mode mode);
+  uint8_t set_mode_(PN7160Mode mode);
 
-  bool start_discovery_(PN7160Mode mode);
+  uint8_t start_discovery_(PN7160Mode mode);
   bool deactivate_(uint8_t type);
 
   void select_tag_();
 
-  std::unique_ptr<nfc::NfcTag> check_for_tag_();
-
   std::unique_ptr<nfc::NfcTag> build_tag_(uint8_t mode_tech, const std::vector<uint8_t> &data);
+  bool check_for_tag_(std::unique_ptr<nfc::NfcTag> &tag);
 
   bool presence_check_();
 
@@ -225,8 +234,9 @@ class PN7160 : public Component,
 
   uint8_t version_[3];
   uint8_t generation_;
+
   uint8_t current_protocol_{PROT_UNDETERMINED};
-  std::vector<uint8_t> current_uid_;
+  std::vector<nfc::NfcTag> tag_;
 
   PN7160State state_{PN7160State::RESET};
 
