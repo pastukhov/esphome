@@ -130,7 +130,11 @@ void PN7160::nci_fsm_transition_() {
             } else {
               tag->set_ndef_message(make_unique<nfc::NdefMessage>(nfc::NdefMessage(write_data)));
               for (size_t i = 0; i < response.size(); i++) {
-                ESP_LOGD(TAG, "Tag data read: 0x%.2x", response[i]);
+                if ((response[i] > 0x1F) && (response[i] < 0x7F)) {
+                  ESP_LOGD(TAG, "Tag data read: 0x%.2x - '%c'", response[i], response[i]);
+                } else {
+                  ESP_LOGD(TAG, "Tag data read: 0x%.2x", response[i]);
+                }
               }
             }
 
