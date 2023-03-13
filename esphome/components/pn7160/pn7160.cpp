@@ -2,6 +2,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include <sstream>
 
 namespace esphome {
 namespace pn7160 {
@@ -10,63 +11,59 @@ static const char *const TAG = "pn7160";
 
 void PN7160::nci_fsm_transition_() {
   switch (this->state_) {
-    case PN7160State::RESET:
+    case PN7160State::NFCC_RESET:
       if (this->reset_core_(true, true) != STATUS_OK) {
         ESP_LOGE(TAG, "Failed to reset NCI core");
-        this->mark_failed();
-        this->state_ = PN7160State::FAILED;
+        this->init_failure_handler_();
       } else {
-        this->state_ = PN7160State::INIT;
+        this->state_ = PN7160State::NFCC_INIT;
       }
       // fall through
 
-    case PN7160State::INIT:
+    case PN7160State::NFCC_INIT:
       if (this->init_core_(true) != STATUS_OK) {
         ESP_LOGE(TAG, "Failed to init NCI core");
-        this->mark_failed();
-        this->state_ = PN7160State::FAILED;
+        this->init_failure_handler_();
       } else {
-        this->state_ = PN7160State::CONFIG;
+        this->state_ = PN7160State::NFCC_CONFIG;
       }
       // fall through
 
-    case PN7160State::CONFIG:
+    case PN7160State::NFCC_CONFIG:
       if (this->send_config_() != STATUS_OK) {
         ESP_LOGE(TAG, "Failed to send config");
-        this->mark_failed();
-        this->state_ = PN7160State::FAILED;
+        this->init_failure_handler_();
       } else {
-        this->state_ = PN7160State::SET_MODE;
+        this->state_ = PN7160State::NFCC_SET_MODE;
       }
       // fall through
 
-    case PN7160State::SET_MODE:
-      if (this->set_mode_(PN7160Mode::READ_WRITE) != STATUS_OK) {
+    case PN7160State::NFCC_SET_MODE:
+      if (this->set_mode_() != STATUS_OK) {
         ESP_LOGE(TAG, "Failed to set mode");
-        this->mark_failed();
-        this->state_ = PN7160State::FAILED;
+        this->init_failure_handler_();
       } else {
-        this->state_ = PN7160State::DISCOVERY;
+        this->state_ = PN7160State::RFST_IDLE;
       }
       return;
 
-    case PN7160State::DISCOVERY:
-      if (this->start_discovery_(PN7160Mode::READ_WRITE) != STATUS_OK) {
+    case PN7160State::RFST_IDLE:
+      if (this->start_discovery_() != STATUS_OK) {
         ESP_LOGE(TAG, "Failed to start discovery");
-        this->mark_failed();
-        this->state_ = PN7160State::FAILED;
       } else {
-        this->state_ = PN7160State::WAITING_FOR_TAG;
+        this->state_ = PN7160State::RFST_DISCOVERY;
       }
       return;
 
-    case PN7160State::WAITING_FOR_REMOVAL:
-      this->presence_check_();
+    case PN7160State::RFST_W4_HOST_SELECT:
+      select_tag_();
+      // fall through
 
     // These cases are waiting for NOTIFICATION messages
-    case PN7160State::WAITING_FOR_TAG:
-    case PN7160State::DEACTIVATING:
-    case PN7160State::SELECTING:
+    case PN7160State::RFST_POLL_ACTIVE:
+    case PN7160State::RFST_DISCOVERY:
+    case PN7160State::EP_DEACTIVATING:
+    case PN7160State::EP_SELECTING:
       break;
 
     case PN7160State::FAILED:
@@ -76,20 +73,18 @@ void PN7160::nci_fsm_transition_() {
   }
 
   if (!this->irq_pin_->digital_read()) {
-    // this->current_uid_ = {};
     return;  // No data to read
   }
 
   std::vector<uint8_t> response;
   if (!this->read_data_(response, 5, false)) {
-    // No data
-    // this->current_uid_ = {};
-    return;
+    return;  // No data
   }
 
   uint8_t mt = response[0] & MT_MASK;
   uint8_t gid = response[0] & GID_MASK;
   uint8_t oid = response[1] & OID_MASK;
+  // uint8_t length = response[2];
 
   switch (mt) {
     case MT_CTRL_RESPONSE:
@@ -99,8 +94,10 @@ void PN7160::nci_fsm_transition_() {
     case MT_CTRL_NOTIFICATION:
       if (gid == RF_GID) {
         switch (oid) {
-          case RF_INTF_ACTIVATED_OID: {
-            // a single endpoint was detected and automatically activated
+          case RF_INTF_ACTIVATED_OID: {  // an endpoint was activated
+            ESP_LOGVV(TAG, "RF_INTF_ACTIVATED_OID");
+            this->state_ = PN7160State::RFST_POLL_ACTIVE;
+            uint8_t discovery_id = response[3];
             uint8_t interface = response[4];
             uint8_t protocol = response[5];
             uint8_t mode_tech = response[6];
@@ -109,58 +106,94 @@ void PN7160::nci_fsm_transition_() {
             // uint8_t rf_tech_params_len = response[9];
             // uint8_t rf_tech_params = response[10];
 
-            this->current_protocol_ = protocol;
-            ESP_LOGD(TAG, "Endpoint detected: interface: 0x%.2X, protocol: 0x%.2X, mode&tech: 0x%.2X, max payload: %u",
-                     interface, protocol, mode_tech, max_size);
-            auto tag = this->build_tag_(mode_tech, std::vector<uint8_t>(response.begin() + 10, response.end()));
+            // this->current_protocol_ = protocol;
+            ESP_LOGVV(TAG, "Endpoint detected: interface: 0x%.2X, protocol: 0x%.2X, mode&tech: 0x%.2X, max payload: %u",
+                      interface, protocol, mode_tech, max_size);
+
+            auto tag = this->build_tag_(mode_tech, std::vector<uint8_t>(response.begin() + 10, response.end()), true);
+
             if (tag == nullptr) {
               ESP_LOGE(TAG, "Could not build tag!");
-              return;
-            }
-
-            if (this->check_for_tag_(tag)) {
-              ESP_LOGD(TAG, "I have seen this tag before!");
-              this->state_ = PN7160State::WAITING_FOR_REMOVAL;
-              return;
-            }
-
-            std::vector<uint8_t> write_data = {nfc::MIFARE_CMD_READ, nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE};
-            if (!this->write_data_and_read_(write_data, response, 50)) {
-              ESP_LOGE(TAG, "Error reading tag data");
             } else {
-              tag->set_ndef_message(make_unique<nfc::NdefMessage>(nfc::NdefMessage(write_data)));
-              for (size_t i = 0; i < response.size(); i++) {
-                if ((response[i] > 0x1F) && (response[i] < 0x7F)) {
-                  ESP_LOGD(TAG, "Tag data read: 0x%.2x - '%c'", response[i], response[i]);
-                } else {
-                  ESP_LOGD(TAG, "Tag data read: 0x%.2x", response[i]);
+              auto tag_loc = this->find_tag_uid_(tag.get()->get_uid());
+              if (tag_loc.has_value()) {
+                this->discovered_endpoint_[tag_loc.value()].id = discovery_id;
+                this->discovered_endpoint_[tag_loc.value()].protocol = protocol;
+                this->discovered_endpoint_[tag_loc.value()].last_seen = millis();
+                ESP_LOGVV(TAG, "Tag found & updated");
+              } else {
+                DiscoveredEndpoint disc_endpoint{discovery_id, protocol, millis(), *tag.get(), false};
+                this->discovered_endpoint_.push_back(disc_endpoint);
+                tag_loc = this->discovered_endpoint_.size() - 1;
+                ESP_LOGVV(TAG, "Tag saved");
+              }
+              // TODO: read tag's NDEF message here if it is not already present
+              if (!this->discovered_endpoint_[tag_loc.value()].trig_called) {
+                for (auto *trigger : this->triggers_ontag_) {
+                  trigger->process(tag);
                 }
+                this->discovered_endpoint_[tag_loc.value()].trig_called = true;
               }
             }
 
-            this->tag_.push_back(*tag.get());
+            // this->state_ = PN7160State::NONE;
+            // this->set_timeout(200, [this]() { this->state_ = PN7160State::RFST_POLL_ACTIVE; });
 
-            for (auto *trigger : this->triggers_ontag_) {
-              trigger->process(tag);
-            }
-
-            this->state_ = PN7160State::NONE;
-            this->set_timeout(200, [this]() { this->state_ = PN7160State::WAITING_FOR_REMOVAL; });
+            this->deactivate_(DEACTIVATION_TYPE_IDLE);
             return;
           }
           case RF_DISCOVER_OID: {
-            ESP_LOGW(TAG, "One tag at a time, please");
+            ESP_LOGVV(TAG, "RF_DISCOVER_OID");
+
+            uint8_t mode_tech = response[5];
+            auto tag = this->build_tag_(mode_tech, std::vector<uint8_t>(response.begin() + 7, response.end()));
+
+            if (tag.get() == nullptr) {
+              ESP_LOGE(TAG, "Could not build tag!");
+            } else {
+              auto tag_loc = this->find_tag_uid_(tag.get()->get_uid());
+              if (tag_loc.has_value()) {
+                this->discovered_endpoint_[tag_loc.value()].id = response[3];
+                this->discovered_endpoint_[tag_loc.value()].protocol = response[4];
+                this->discovered_endpoint_[tag_loc.value()].last_seen = millis();
+                ESP_LOGVV(TAG, "Tag found & updated");
+              } else {
+                DiscoveredEndpoint disc_endpoint{response[3], response[4], millis(), *tag.get(), false};
+                this->discovered_endpoint_.push_back(disc_endpoint);
+                ESP_LOGVV(TAG, "Tag saved");
+              }
+            }
+
+            if (response.back() != RF_DISCOVER_NTF_NT_MORE) {
+              this->state_ = PN7160State::RFST_W4_HOST_SELECT;
+              ESP_LOGVV(TAG, "Discovered %u endpoints", this->discovered_endpoint_.size());
+            }
             break;
           }
           case RF_DEACTIVATE_OID: {
-            ESP_LOGW(TAG, "Deactivate OID received: type: 0x%.2X, reason: 0x%.2X", response[3], response[4]);
-            if (this->next_function_ != nullptr) {
-              this->next_function_();
-              this->next_function_ = nullptr;
+            ESP_LOGVV(TAG, "RF_DEACTIVATE_OID: type: 0x%.2X, reason: 0x%.2X", response[3], response[4]);
+            // if (this->next_function_ != nullptr) {
+            //   this->next_function_();
+            //   this->next_function_ = nullptr;
+            // }
+            switch (response[3]) {
+              case DEACTIVATION_TYPE_DISCOVERY:
+                this->state_ = PN7160State::RFST_DISCOVERY;
+                break;
+
+              case DEACTIVATION_TYPE_IDLE:
+                this->state_ = PN7160State::RFST_IDLE;
+                break;
+
+              case DEACTIVATION_TYPE_SLEEP:
+              case DEACTIVATION_TYPE_SLEEP_AF:
+                this->state_ = PN7160State::RFST_W4_HOST_SELECT;
+                break;
+
+              default:
+                break;
             }
             break;
-            // if (response[3] == DEACTIVATION_TYPE_SLEEP) {
-            // }
           }
           default:
             ESP_LOGW(TAG, "Unsupported RF OID received: 0x%.2X", oid);
@@ -168,15 +201,17 @@ void PN7160::nci_fsm_transition_() {
       } else if (gid == NCI_CORE_GID) {
         switch (oid) {
           case NCI_CORE_GENERIC_ERROR_OID:
+            ESP_LOGW(TAG, "NCI_CORE_GENERIC_ERROR_OID: 0x%.2X", response[3]);
             switch (response[3]) {
               case DISCOVERY_TARGET_ACTIVATION_FAILED:
                 // Tag removed
-                ESP_LOGD(TAG, "Purging all tags...");
-                this->tag_.clear();
-                if (!this->deactivate_(DEACTIVATION_TYPE_IDLE)) {
-                  ESP_LOGE(TAG, "Error deactivating");
-                }
-                this->state_ = PN7160State::DISCOVERY;
+                // ESP_LOGD(TAG, "DISCOVERY_TARGET_ACTIVATION_FAILED");
+                // ESP_LOGD(TAG, "Purging all tags...");
+                // this->discovered_endpoint_.clear();
+                // if (!this->deactivate_(DEACTIVATION_TYPE_IDLE)) {
+                //   ESP_LOGE(TAG, "Error deactivating");
+                // }
+                // this->state_ = PN7160State::RFST_DISCOVERY;
                 break;
             }
             break;
@@ -191,6 +226,50 @@ void PN7160::nci_fsm_transition_() {
 
     default:
       break;
+  }
+}
+
+optional<size_t> PN7160::find_discovery_id_(uint8_t id) {
+  if (this->discovered_endpoint_.size()) {
+    for (size_t i = 0; i < this->discovered_endpoint_.size(); i++) {
+      if (this->discovered_endpoint_[i].id == id) {
+        return i;
+      }
+    }
+  }
+  return nullopt;
+}
+
+optional<size_t> PN7160::find_tag_uid_(const std::vector<uint8_t> &uid) {
+  if (this->discovered_endpoint_.size()) {
+    for (size_t i = 0; i < this->discovered_endpoint_.size(); i++) {
+      auto existing_tag_uid = this->discovered_endpoint_[i].tag.get_uid();
+      bool tag_match = (uid.size() == existing_tag_uid.size());
+
+      if (tag_match) {
+        for (size_t i = 0; i < uid.size(); i++) {
+          if (uid[i] != existing_tag_uid[i]) {
+            tag_match = false;
+          }
+        }
+        if (tag_match) {
+          return i;
+        }
+      }
+    }
+  }
+  return nullopt;
+}
+
+void PN7160::init_failure_handler_() {
+  ESP_LOGE(TAG, "Communication failure");
+  if (this->fail_count_ < MAX_FAILS) {
+    ESP_LOGE(TAG, "Initialization attempt %u failed, retrying...", this->fail_count_++);
+    this->state_ = PN7160State::NFCC_RESET;
+  } else {
+    ESP_LOGE(TAG, "Too many initialization failures -- check device connections");
+    this->mark_failed();
+    this->state_ = PN7160State::FAILED;
   }
 }
 
@@ -370,25 +449,22 @@ uint8_t PN7160::send_config_() {
   return STATUS_OK;
 }
 
-uint8_t PN7160::set_mode_(PN7160Mode mode) {
-  if (mode == PN7160Mode::READ_WRITE) {
-    std::vector<uint8_t> response;
-    std::vector<uint8_t> write_data;
+uint8_t PN7160::set_mode_() {
+  std::vector<uint8_t> response;
+  std::vector<uint8_t> write_data;
 
-    write_data.resize(1 + sizeof(READ_WRITE_MODE));
-    write_data[0] = sizeof(READ_WRITE_MODE) / 3;
-    memcpy(&write_data[1], READ_WRITE_MODE, sizeof(READ_WRITE_MODE));
+  write_data.resize(1 + sizeof(READ_WRITE_MODE));
+  write_data[0] = sizeof(READ_WRITE_MODE) / 3;
+  memcpy(&write_data[1], READ_WRITE_MODE, sizeof(READ_WRITE_MODE));
 
-    if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_MAP_OID, write_data, response, 10)) {
-      ESP_LOGE(TAG, "Error sending discover map");
-      return STATUS_FAILED;
-    }
-    return STATUS_OK;
+  if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_MAP_OID, write_data, response, 10)) {
+    ESP_LOGE(TAG, "Error sending discover map");
+    return STATUS_FAILED;
   }
-  return STATUS_FAILED;
+  return STATUS_OK;
 }
 
-uint8_t PN7160::start_discovery_(PN7160Mode mode) {
+uint8_t PN7160::start_discovery_() {
   std::vector<uint8_t> response;
   uint8_t length = sizeof(DISCOVERY_READ_WRITE);
   std::vector<uint8_t> write_data = std::vector<uint8_t>((length * 2) + 1);
@@ -400,7 +476,7 @@ uint8_t PN7160::start_discovery_(PN7160Mode mode) {
   }
 
   if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_OID, write_data, response)) {
-    ESP_LOGE(TAG, "Error sending discovery");
+    ESP_LOGE(TAG, "Error starting discovery");
     return STATUS_FAILED;
   }
 
@@ -414,28 +490,49 @@ bool PN7160::deactivate_(uint8_t type) {
     return false;
   }
 
-  this->state_ = PN7160State::DEACTIVATING;
+  this->state_ = PN7160State::EP_DEACTIVATING;
   return true;
 }
 
-std::unique_ptr<nfc::NfcTag> PN7160::build_tag_(uint8_t mode_tech, const std::vector<uint8_t> &data) {
+std::unique_ptr<nfc::NfcTag> PN7160::build_tag_(uint8_t mode_tech, const std::vector<uint8_t> &data, bool print_uid) {
   switch (mode_tech) {
     case (MODE_POLL | TECH_PASSIVE_NFCA): {
       uint8_t uid_length = data[2];
+      if (!uid_length) {
+        ESP_LOGW(TAG, "UID length cannot be zero!");
+        return nullptr;
+      }
       std::vector<uint8_t> uid(data.begin() + 3, data.begin() + 3 + uid_length);
-      return make_unique<nfc::NfcTag>(uid, nfc::MIFARE_CLASSIC);
+      std::ostringstream tag_msg;
+      auto tag_type_str =
+          nfc::guess_tag_type(uid_length) == nfc::TAG_TYPE_MIFARE_CLASSIC ? nfc::MIFARE_CLASSIC : nfc::NFC_FORUM_TYPE_2;
+      tag_msg << "Tag type " << tag_type_str << " with UID ";
+      for (size_t i = 0; i < uid.size(); i++) {
+        char buffer[6];
+        sprintf(buffer, "%02X", uid[i]);
+        if (i > 0) {
+          tag_msg << "-";
+        }
+        tag_msg << buffer;
+      }
+
+      if (print_uid) {
+        ESP_LOGD(TAG, "%s", tag_msg.str().c_str());
+      }
+
+      return make_unique<nfc::NfcTag>(uid, tag_type_str);
     }
   }
   return nullptr;
 }
 
 bool PN7160::check_for_tag_(std::unique_ptr<nfc::NfcTag> &tag) {
-  for (auto cur_tag : this->tag_) {
-    if (tag->get_uid().size() == cur_tag.get_uid().size()) {  // if the uid sizes match, this is a tag of interest
+  for (auto endpoint : this->discovered_endpoint_) {
+    if (tag->get_uid().size() == endpoint.tag.get_uid().size()) {  // if the uid sizes match, this is a tag of interest
       bool same_uid = true;
-      for (size_t i = 0; i < cur_tag.get_uid().size(); i++) {
+      for (size_t i = 0; i < endpoint.tag.get_uid().size(); i++) {
         // ESP_LOGD(TAG, "UID: %u", tag->get_uid()[i]);
-        same_uid &= cur_tag.get_uid()[i] == tag->get_uid()[i];
+        same_uid &= endpoint.tag.get_uid()[i] == tag->get_uid()[i];
       }
       if (same_uid) {
         return true;
@@ -446,53 +543,95 @@ bool PN7160::check_for_tag_(std::unique_ptr<nfc::NfcTag> &tag) {
 }
 
 void PN7160::select_tag_() {
-  std::vector<uint8_t> response;
-  uint8_t interface = INTF_UNDETERMINED;
-  switch (this->current_protocol_) {
-    case PROT_ISODEP:
-      interface = INTF_ISODEP;
-      break;
-    case PROT_NFCDEP:
-      interface = INTF_NFCDEP;
-      break;
-    case PROT_MIFARE:
-      interface = INTF_TAGCMD;
-      break;
-    default:
-      interface = INTF_FRAME;
-      break;
-  }
-  if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_SELECT_OID, {0x01, this->current_protocol_, interface},
-                                  response)) {
-    ESP_LOGE(TAG, "Error sending discovery select");
+  if (!this->discovered_endpoint_.size()) {
+    ESP_LOGE(TAG, "No cached tags to select!");
     return;
   }
-  this->state_ = PN7160State::SELECTING;
+  std::vector<uint8_t> response;
+  std::vector<uint8_t> write_data = {this->discovered_endpoint_[0].id, this->discovered_endpoint_[0].protocol,
+                                     0x01};  // that last byte is the interface ID
+  for (size_t i = 0; i < this->discovered_endpoint_.size(); i++) {
+    if (!this->discovered_endpoint_[i].trig_called) {
+      write_data = {this->discovered_endpoint_[i].id, this->discovered_endpoint_[i].protocol,
+                    0x01};  // that last byte is the interface ID
+      break;
+    }
+  }
+
+  if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_SELECT_OID, write_data.data(), write_data.size(), response)) {
+    ESP_LOGE(TAG, "Error selecting endpoint");
+  } else {
+    this->state_ = PN7160State::EP_SELECTING;
+  }
+  // uint8_t interface = INTF_UNDETERMINED;
+  // switch (this->current_protocol_) {
+  //   case PROT_ISODEP:
+  //     interface = INTF_ISODEP;
+  //     break;
+  //   case PROT_NFCDEP:
+  //     interface = INTF_NFCDEP;
+  //     break;
+  //   case PROT_MIFARE:
+  //     interface = INTF_TAGCMD;
+  //     break;
+  //   default:
+  //     interface = INTF_FRAME;
+  //     break;
+  // }
+  // if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_SELECT_OID, {0x01, this->current_protocol_, interface},
+  //                                 response)) {
+  //   ESP_LOGE(TAG, "Error sending discovery select");
+  //   return;
+  // }
 }
 
-bool PN7160::presence_check_() {
-  std::vector<uint8_t> response;
-  switch (this->current_protocol_) {
-    case PROT_MIFARE: {
-      this->deactivate_(DEACTIVATION_TYPE_SLEEP);
-      this->next_function_ = std::bind(&PN7160::select_tag_, this);
-    }
-    case PROT_T2T: {
-      this->deactivate_(DEACTIVATION_TYPE_SLEEP);
-      this->next_function_ = std::bind(&PN7160::select_tag_, this);
-    }
-    default:
-      break;
-  }
-  return false;
-}
+// bool PN7160::presence_check_() {
+//   std::vector<uint8_t> response;
+//   switch (this->current_protocol_) {
+//     case PROT_MIFARE: {
+//       this->deactivate_(DEACTIVATION_TYPE_SLEEP);
+//       // this->next_function_ = std::bind(&PN7160::select_tag_, this);
+//     }
+//     case PROT_T2T: {
+//       this->deactivate_(DEACTIVATION_TYPE_SLEEP);
+//       // this->next_function_ = std::bind(&PN7160::select_tag_, this);
+//     }
+//     default:
+//       break;
+//   }
+//   return false;
+// }
 
 void PN7160::dump_config() {
   ESP_LOGCONFIG(TAG, "PN7160:");
   LOG_PIN("  CS Pin: ", this->cs_);
 }
 
-void PN7160::loop() { this->nci_fsm_transition_(); }
+void PN7160::loop() {
+  this->purge_old_tags_();
+  this->nci_fsm_transition_();
+}
+
+void PN7160::purge_old_tags_() {
+  std::ostringstream tag_msg;
+  tag_msg << "Removing old tag UID from cache ";
+
+  for (size_t i = 0; i < this->discovered_endpoint_.size(); i++) {
+    if (millis() - this->discovered_endpoint_[i].last_seen > TAG_TTL) {
+      auto uid = this->discovered_endpoint_[i].tag.get_uid();
+      for (size_t i = 0; i < uid.size(); i++) {
+        char buffer[6];
+        sprintf(buffer, "%02X", uid[i]);
+        if (i > 0) {
+          tag_msg << "-";
+        }
+        tag_msg << buffer;
+      }
+      ESP_LOGW(TAG, "%s", tag_msg.str().c_str());
+      this->discovered_endpoint_.erase(this->discovered_endpoint_.begin() + i);
+    }
+  }
+}
 
 bool PN7160::write_ctrl_and_read_(uint8_t gid, uint8_t oid, const std::vector<uint8_t> &data,
                                   std::vector<uint8_t> &response, uint16_t timeout, bool warn) {

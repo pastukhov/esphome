@@ -12,6 +12,9 @@
 namespace esphome {
 namespace pn7160 {
 
+static const uint8_t MAX_FAILS = 2;
+static const uint16_t TAG_TTL = 500;
+
 static const uint8_t TDD_SPI_READ = 0xFF;
 static const uint8_t TDD_SPI_WRITE = 0x0A;
 
@@ -109,6 +112,7 @@ static const uint8_t RF_TVDD_CONFIG[] = {
     0x0C,  // RFU
 };
 
+static const uint8_t MODE_LISTEN = 0x80;
 static const uint8_t MODE_POLL = 0x00;
 static const uint8_t TECH_PASSIVE_NFCA = 0;
 static const uint8_t TECH_PASSIVE_NFCB = 1;
@@ -142,8 +146,8 @@ static const uint8_t READ_WRITE_MODE[] = {PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL
                                           PROT_MIFARE, RF_DISCOVER_MAP_MODE_POLL, INTF_TAGCMD};  // Poll mode
 
 static const uint8_t DISCOVERY_READ_WRITE[] = {MODE_POLL | TECH_PASSIVE_NFCA,    //
-                                               MODE_POLL | TECH_PASSIVE_NFCF,    //
                                                MODE_POLL | TECH_PASSIVE_NFCB,    //
+                                               MODE_POLL | TECH_PASSIVE_NFCF,    //
                                                MODE_POLL | TECH_PASSIVE_15693};  //
 
 static const uint8_t DEACTIVATION_TYPE_IDLE = 0x00;
@@ -156,22 +160,32 @@ static const uint8_t STATUS_REJECTED = 0x01;
 static const uint8_t STATUS_RF_FRAME_CORRUPTED = 0x02;
 static const uint8_t STATUS_FAILED = 0x03;
 static const uint8_t STATUS_NOT_INITIALIZED = 0x04;
+static const uint8_t STATUS_SYNTAX_ERROR = 0x05;
+static const uint8_t STATUS_SEMANTIC_ERROR = 0x06;
+static const uint8_t STATUS_INVALID_PARAM = 0x09;
+static const uint8_t STATUS_MESSAGE_SIZE_EXCEEDED = 0x0A;
 
-static const uint8_t DISCOVERY_ALREADY_STARTED = 0xA1;
+static const uint8_t DISCOVERY_ALREADY_STARTED = 0xA0;
 static const uint8_t DISCOVERY_TARGET_ACTIVATION_FAILED = 0xA1;
-static const uint8_t DISCOVERY_TEAR_DOWN = 0xA1;
+static const uint8_t DISCOVERY_TEAR_DOWN = 0xA2;
+
+static const uint8_t RF_DISCOVER_NTF_NT_LAST = 0x00;
+static const uint8_t RF_DISCOVER_NTF_NT_LAST_RL = 0x01;
+static const uint8_t RF_DISCOVER_NTF_NT_MORE = 0x02;
 
 enum class PN7160State : uint8_t {
   NONE = 0x00,
-  RESET,
-  INIT,
-  CONFIG,
-  SET_MODE,
-  DISCOVERY,
-  WAITING_FOR_TAG,
-  DEACTIVATING,
-  SELECTING,
-  WAITING_FOR_REMOVAL,
+  NFCC_RESET,
+  NFCC_INIT,
+  NFCC_CONFIG,
+  NFCC_SET_MODE,
+  RFST_IDLE,
+  RFST_DISCOVERY,
+  RFST_W4_ALL_DISCOVERIES,
+  RFST_W4_HOST_SELECT,
+  RFST_POLL_ACTIVE,
+  EP_DEACTIVATING,
+  EP_SELECTING,
   FAILED = 0XFF,
 };
 
@@ -179,6 +193,14 @@ enum PN7160Mode : uint8_t {
   CARD_EMULATION = 1 << 0,
   P2P = 1 << 1,
   READ_WRITE = 1 << 2,
+};
+
+struct DiscoveredEndpoint {
+  uint8_t id;
+  uint8_t protocol;
+  uint32_t last_seen;
+  nfc::NfcTag tag;
+  bool trig_called;
 };
 
 class PN7160 : public Component,
@@ -200,6 +222,14 @@ class PN7160 : public Component,
   /// advance controller state as required
   void nci_fsm_transition_();
 
+  /// remove "old" cached tags
+  void purge_old_tags_();
+
+  optional<size_t> find_discovery_id_(uint8_t id);
+  optional<size_t> find_tag_uid_(const std::vector<uint8_t> &uid);
+
+  void init_failure_handler_();
+
   bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const std::vector<uint8_t> &data, std::vector<uint8_t> &response,
                             uint16_t timeout = 5, bool warn = true);
   bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const uint8_t *data, const uint8_t len,
@@ -215,35 +245,34 @@ class PN7160 : public Component,
   uint8_t init_core_(bool store_report);
   uint8_t send_config_();
 
-  uint8_t set_mode_(PN7160Mode mode);
+  uint8_t set_mode_();
 
-  uint8_t start_discovery_(PN7160Mode mode);
+  uint8_t start_discovery_();
   bool deactivate_(uint8_t type);
 
   void select_tag_();
 
-  std::unique_ptr<nfc::NfcTag> build_tag_(uint8_t mode_tech, const std::vector<uint8_t> &data);
+  std::unique_ptr<nfc::NfcTag> build_tag_(uint8_t mode_tech, const std::vector<uint8_t> &data, bool print_uid = false);
   bool check_for_tag_(std::unique_ptr<nfc::NfcTag> &tag);
 
-  bool presence_check_();
+  // bool presence_check_();
 
   GPIOPin *dwl_req_pin_;
   GPIOPin *irq_pin_;
   GPIOPin *ven_pin_;
   GPIOPin *wkup_req_pin_;
 
+  uint8_t fail_count_{0};
+  uint8_t generation_{0};
   uint8_t version_[3];
-  uint8_t generation_;
 
-  uint8_t current_protocol_{PROT_UNDETERMINED};
-  std::vector<nfc::NfcTag> tag_;
+  // uint8_t current_protocol_{PROT_UNDETERMINED};
+  std::vector<DiscoveredEndpoint> discovered_endpoint_;
 
-  PN7160State state_{PN7160State::RESET};
+  PN7160State state_{PN7160State::NFCC_RESET};
 
   /// This is used when waiting for a notification that will be read in `loop`.
-  std::function<void()> next_function_{nullptr};
-
-  // PN7160State next_state_{PN7160State::NONE};
+  // std::function<void()> next_function_{nullptr};
 
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
 };
