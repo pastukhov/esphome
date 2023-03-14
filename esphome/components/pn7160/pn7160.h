@@ -12,6 +12,8 @@
 namespace esphome {
 namespace pn7160 {
 
+static const uint8_t DEFAULT_TIMEOUT = 5;
+static const uint8_t INIT_TIMEOUT = 50;
 static const uint8_t MAX_FAILS = 2;
 static const uint16_t TAG_TTL = 500;
 
@@ -231,15 +233,15 @@ class PN7160 : public Component,
   void init_failure_handler_();
 
   bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const std::vector<uint8_t> &data, std::vector<uint8_t> &response,
-                            uint16_t timeout = 5, bool warn = true);
+                            uint16_t timeout = DEFAULT_TIMEOUT, bool warn = true);
   bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const uint8_t *data, const uint8_t len,
-                            std::vector<uint8_t> &response, uint16_t timeout = 5, bool warn = true);
+                            std::vector<uint8_t> &response, uint16_t timeout = DEFAULT_TIMEOUT, bool warn = true);
   bool write_data_and_read_(std::vector<uint8_t> &data, std::vector<uint8_t> &response, uint16_t timeout = 5,
                             bool warn = true);
   bool write_and_read_(std::vector<uint8_t> &data, std::vector<uint8_t> &response, uint16_t timeout, bool warn);
   bool write_data_(const std::vector<uint8_t> &data);
-  bool read_data_(std::vector<uint8_t> &data, uint16_t timeout = 5, bool warn = true);
-  bool wait_for_irq_(uint16_t timeout = 5, bool state = true, bool warn = true);
+  bool read_data_(std::vector<uint8_t> &data, uint16_t timeout = DEFAULT_TIMEOUT, bool warn = true);
+  bool wait_for_irq_(uint16_t timeout = DEFAULT_TIMEOUT, bool state = true, bool warn = true);
 
   uint8_t reset_core_(bool reset_config, bool power);
   uint8_t init_core_(bool store_report);
@@ -256,6 +258,7 @@ class PN7160 : public Component,
   bool check_for_tag_(std::unique_ptr<nfc::NfcTag> &tag);
 
   // bool presence_check_();
+  void process_message_();
 
   GPIOPin *dwl_req_pin_;
   GPIOPin *irq_pin_;
@@ -265,14 +268,11 @@ class PN7160 : public Component,
   uint8_t fail_count_{0};
   uint8_t generation_{0};
   uint8_t version_[3];
+  uint8_t selecting_endpoint_{0};
 
-  // uint8_t current_protocol_{PROT_UNDETERMINED};
   std::vector<DiscoveredEndpoint> discovered_endpoint_;
 
   PN7160State state_{PN7160State::NFCC_RESET};
-
-  /// This is used when waiting for a notification that will be read in `loop`.
-  // std::function<void()> next_function_{nullptr};
 
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
 };

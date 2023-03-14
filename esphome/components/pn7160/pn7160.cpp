@@ -60,10 +60,13 @@ void PN7160::nci_fsm_transition_() {
       // fall through
 
     // These cases are waiting for NOTIFICATION messages
-    case PN7160State::RFST_POLL_ACTIVE:
-    case PN7160State::RFST_DISCOVERY:
-    case PN7160State::EP_DEACTIVATING:
     case PN7160State::EP_SELECTING:
+    case PN7160State::RFST_DISCOVERY:
+    case PN7160State::RFST_POLL_ACTIVE:
+    case PN7160State::EP_DEACTIVATING:
+      if (this->irq_pin_->digital_read()) {
+        this->process_message_();
+      }
       break;
 
     case PN7160State::FAILED:
@@ -71,13 +74,11 @@ void PN7160::nci_fsm_transition_() {
     default:
       return;
   }
+}
 
-  if (!this->irq_pin_->digital_read()) {
-    return;  // No data to read
-  }
-
+void PN7160::process_message_() {
   std::vector<uint8_t> response;
-  if (!this->read_data_(response, 5, false)) {
+  if (!this->read_data_(response, DEFAULT_TIMEOUT, false)) {
     return;  // No data
   }
 
@@ -88,7 +89,7 @@ void PN7160::nci_fsm_transition_() {
 
   switch (mt) {
     case MT_CTRL_RESPONSE:
-      ESP_LOGW(TAG, "Unimplemented response: GID: 0x%.2X  OID: 0x%.2X", gid, oid);
+      ESP_LOGW(TAG, "Unimplemented response: GID: 0x%02X  OID: 0x%02X", gid, oid);
       break;
 
     case MT_CTRL_NOTIFICATION:
@@ -107,7 +108,7 @@ void PN7160::nci_fsm_transition_() {
             // uint8_t rf_tech_params = response[10];
 
             // this->current_protocol_ = protocol;
-            ESP_LOGVV(TAG, "Endpoint detected: interface: 0x%.2X, protocol: 0x%.2X, mode&tech: 0x%.2X, max payload: %u",
+            ESP_LOGVV(TAG, "Endpoint detected: interface: 0x%02X, protocol: 0x%02X, mode&tech: 0x%02X, max payload: %u",
                       interface, protocol, mode_tech, max_size);
 
             auto tag = this->build_tag_(mode_tech, std::vector<uint8_t>(response.begin() + 10, response.end()), true);
@@ -135,9 +136,6 @@ void PN7160::nci_fsm_transition_() {
                 this->discovered_endpoint_[tag_loc.value()].trig_called = true;
               }
             }
-
-            // this->state_ = PN7160State::NONE;
-            // this->set_timeout(200, [this]() { this->state_ = PN7160State::RFST_POLL_ACTIVE; });
 
             this->deactivate_(DEACTIVATION_TYPE_IDLE);
             return;
@@ -171,11 +169,7 @@ void PN7160::nci_fsm_transition_() {
             break;
           }
           case RF_DEACTIVATE_OID: {
-            ESP_LOGVV(TAG, "RF_DEACTIVATE_OID: type: 0x%.2X, reason: 0x%.2X", response[3], response[4]);
-            // if (this->next_function_ != nullptr) {
-            //   this->next_function_();
-            //   this->next_function_ = nullptr;
-            // }
+            ESP_LOGVV(TAG, "RF_DEACTIVATE_OID: type: 0x%02X, reason: 0x%02X", response[3], response[4]);
             switch (response[3]) {
               case DEACTIVATION_TYPE_DISCOVERY:
                 this->state_ = PN7160State::RFST_DISCOVERY;
@@ -196,28 +190,43 @@ void PN7160::nci_fsm_transition_() {
             break;
           }
           default:
-            ESP_LOGW(TAG, "Unsupported RF OID received: 0x%.2X", oid);
+            ESP_LOGW(TAG, "Unsupported RF OID received: 0x%02X", oid);
         }
       } else if (gid == NCI_CORE_GID) {
         switch (oid) {
           case NCI_CORE_GENERIC_ERROR_OID:
-            ESP_LOGW(TAG, "NCI_CORE_GENERIC_ERROR_OID: 0x%.2X", response[3]);
+            ESP_LOGW(TAG, "NCI_CORE_GENERIC_ERROR_OID: 0x%02X", response[3]);
             switch (response[3]) {
+              case DISCOVERY_ALREADY_STARTED:
+                ESP_LOGW(TAG, "  DISCOVERY_ALREADY_STARTED");
+                break;
+
               case DISCOVERY_TARGET_ACTIVATION_FAILED:
-                // Tag removed
-                // ESP_LOGD(TAG, "DISCOVERY_TARGET_ACTIVATION_FAILED");
-                // ESP_LOGD(TAG, "Purging all tags...");
-                // this->discovered_endpoint_.clear();
-                // if (!this->deactivate_(DEACTIVATION_TYPE_IDLE)) {
-                //   ESP_LOGE(TAG, "Error deactivating");
-                // }
-                // this->state_ = PN7160State::RFST_DISCOVERY;
+                // Tag removed too soon
+                ESP_LOGW(TAG, "  DISCOVERY_TARGET_ACTIVATION_FAILED");
+                if (this->state_ == PN7160State::EP_SELECTING) {
+                  this->discovered_endpoint_.erase(this->discovered_endpoint_.begin() + this->selecting_endpoint_);
+                  if (this->discovered_endpoint_.size() > 0) {
+                    this->state_ = PN7160State::RFST_W4_HOST_SELECT;
+                  } else {
+                    // unusual case, but it can happen and must be handled
+                    this->deactivate_(DEACTIVATION_TYPE_IDLE);
+                    this->state_ = PN7160State::RFST_IDLE;
+                  }
+                }
+                break;
+
+              case DISCOVERY_TEAR_DOWN:
+                ESP_LOGW(TAG, "  DISCOVERY_TEAR_DOWN");
+                break;
+
+              default:
                 break;
             }
             break;
 
           default:
-            ESP_LOGW(TAG, "Unsupported NCI Core OID received: 0x%.2X", oid);
+            ESP_LOGW(TAG, "Unsupported NCI Core OID received: 0x%02X", oid);
         }
       }
       break;
@@ -304,18 +313,18 @@ uint8_t PN7160::reset_core_(bool reset_config, bool power) {
   else
     write_data.push_back(0x00);
 
-  if (!this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_RESET_OID, write_data, response, 50)) {
+  if (!this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_RESET_OID, write_data, response, INIT_TIMEOUT)) {
     ESP_LOGE(TAG, "Error sending reset command");
     return STATUS_FAILED;
   }
 
   if (response[3] != STATUS_OK) {
-    ESP_LOGE(TAG, "Invalid reset response: 0x%.2X", response[3]);
+    ESP_LOGE(TAG, "Invalid reset response: 0x%02X", response[3]);
     return response[3];
   }
 
   // there may also be a notification in response to the reset command. we don't care but still need to read it back
-  this->read_data_(response, 50);
+  this->read_data_(response);
 
   return STATUS_OK;
 }
@@ -329,7 +338,7 @@ uint8_t PN7160::init_core_(bool store_report) {
   }
 
   if (response[3] != STATUS_OK) {
-    ESP_LOGE(TAG, "Invalid initialise response: 0x%.2X", response[3]);
+    ESP_LOGE(TAG, "Invalid initialise response: 0x%02X", response[3]);
   } else if (store_report) {
     this->version_[0] = response[17 + response[8]];
     this->version_[1] = response[18 + response[8]];
@@ -457,7 +466,7 @@ uint8_t PN7160::set_mode_() {
   write_data[0] = sizeof(READ_WRITE_MODE) / 3;
   memcpy(&write_data[1], READ_WRITE_MODE, sizeof(READ_WRITE_MODE));
 
-  if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_MAP_OID, write_data, response, 10)) {
+  if (!this->write_ctrl_and_read_(RF_GID, RF_DISCOVER_MAP_OID, write_data, response)) {
     ESP_LOGE(TAG, "Error sending discover map");
     return STATUS_FAILED;
   }
@@ -485,7 +494,7 @@ uint8_t PN7160::start_discovery_() {
 
 bool PN7160::deactivate_(uint8_t type) {
   std::vector<uint8_t> response;
-  if (!this->write_ctrl_and_read_(RF_GID, RF_DEACTIVATE_OID, {type}, response, 20)) {
+  if (!this->write_ctrl_and_read_(RF_GID, RF_DEACTIVATE_OID, {type}, response)) {
     ESP_LOGE(TAG, "Error sending deactivate");
     return false;
   }
@@ -554,6 +563,7 @@ void PN7160::select_tag_() {
     if (!this->discovered_endpoint_[i].trig_called) {
       write_data = {this->discovered_endpoint_[i].id, this->discovered_endpoint_[i].protocol,
                     0x01};  // that last byte is the interface ID
+      this->selecting_endpoint_ = i;
       break;
     }
   }
@@ -665,12 +675,12 @@ bool PN7160::write_ctrl_and_read_(uint8_t gid, uint8_t oid, const uint8_t *data,
   }
 
   if ((response[0] & GID_MASK) != gid || (response[1] & OID_MASK) != oid) {
-    ESP_LOGE(TAG, "Incorrect response: 0x%.2x 0x%.2x 0x%.2x ", response[0], response[1], response[2]);
+    ESP_LOGE(TAG, "Incorrect response: 0x%02X 0x%02X 0x%02X ", response[0], response[1], response[2]);
     return false;
   }
 
   if (response[3] != STATUS_OK) {
-    ESP_LOGE(TAG, "Error in response: %d", response[3]);
+    ESP_LOGE(TAG, "Error in response: 0x%02X", response[3]);
     return false;
   }
 
@@ -694,7 +704,7 @@ bool PN7160::write_data_and_read_(std::vector<uint8_t> &data, std::vector<uint8_
 
   if ((response[0] != (MT_CTRL_NOTIFICATION | NCI_CORE_GID)) || (response[1] != NCI_CORE_CONN_CREDITS_OID) ||
       (response[2] != 3)) {
-    ESP_LOGE(TAG, "Incorrect response: 0x%.2x 0x%.2x 0x%.2x ", response[0], response[1], response[2]);
+    ESP_LOGE(TAG, "Incorrect response: 0x%02X 0x%02X 0x%02X ", response[0], response[1], response[2]);
     return false;
   }
 
