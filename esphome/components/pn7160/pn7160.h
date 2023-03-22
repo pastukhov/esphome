@@ -231,6 +231,8 @@ class PN7160 : public Component,
   void set_ven_pin(GPIOPin *ven_pin) { this->ven_pin_ = ven_pin; }
   void set_wkup_req_pin(GPIOPin *wkup_req_pin) { this->wkup_req_pin_ = wkup_req_pin; }
 
+  void set_tag_ttl(uint32_t ttl) { this->tag_ttl_ = ttl; }
+
   void register_tag(PN7160BinarySensor *tag) { this->binary_sensors_.push_back(tag); }
   void register_ontag_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontag_.push_back(trig); }
   void register_ontagremoved_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontagremoved_.push_back(trig); }
@@ -321,7 +323,7 @@ class PN7160 : public Component,
   uint8_t fail_count_{0};
   uint8_t generation_{0};
   uint8_t selecting_endpoint_{0};
-  uint8_t tag_ttl_{250};
+  uint32_t tag_ttl_{250};
   uint8_t version_[3];
 
   CallbackManager<void()> on_finished_write_callback_;

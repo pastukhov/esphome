@@ -11,6 +11,7 @@ DEPENDENCIES = ["spi"]
 CONF_DWL_REQ_PIN = "dwl_req_pin"
 CONF_IRQ_PIN = "irq_pin"
 CONF_ON_FINISHED_WRITE = "on_finished_write"
+CONF_TAG_TTL = "tag_ttl"
 CONF_VEN_PIN = "ven_pin"
 CONF_WKUP_REQ_PIN = "wkup_req_pin"
 
@@ -50,6 +51,7 @@ CONFIG_SCHEMA = (
                     cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(nfc.NfcOnTagTrigger),
                 }
             ),
+            cv.Optional(CONF_TAG_TTL): cv.positive_time_period_milliseconds,
             cv.Required(CONF_DWL_REQ_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_IRQ_PIN): pins.gpio_input_pin_schema,
             cv.Required(CONF_VEN_PIN): pins.gpio_output_pin_schema,
@@ -77,6 +79,9 @@ async def to_code(config):
 
     pin = await cg.gpio_pin_expression(config[CONF_WKUP_REQ_PIN])
     cg.add(var.set_wkup_req_pin(pin))
+
+    if CONF_TAG_TTL in config:
+        cg.add(var.set_tag_ttl(config[CONF_TAG_TTL]))
 
     for conf in config.get(CONF_ON_TAG, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID])
