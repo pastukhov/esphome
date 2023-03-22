@@ -12,19 +12,20 @@
 namespace esphome {
 namespace pn7160 {
 
-static const uint8_t DEFAULT_TIMEOUT = 5;
-static const uint8_t INIT_TIMEOUT = 50;
-static const uint8_t MAX_FAILS = 2;
-static const uint16_t TAG_TTL = 500;
+static const uint8_t NFCC_DEFAULT_TIMEOUT = 5;
+static const uint8_t NFCC_INIT_TIMEOUT = 50;
+static const uint8_t NFCC_MFC_TIMEOUT = 10;
+
+static const uint8_t NFCC_MAX_COMM_FAILS = 2;
 
 static const uint8_t TDD_SPI_READ = 0xFF;
 static const uint8_t TDD_SPI_WRITE = 0x0A;
 
 static const uint8_t MT_MASK = 0xE0;
 
-static const uint8_t MT_DATA = 0x00;
-static const uint8_t MT_CTRL_COMMAND = 0x20;       // For sending commands
-static const uint8_t MT_CTRL_RESPONSE = 0x40;      // Response to commands
+static const uint8_t MT_DATA = 0x00;               // For sending commands to NFC endpoint (tag)
+static const uint8_t MT_CTRL_COMMAND = 0x20;       // For sending commands to NFCC
+static const uint8_t MT_CTRL_RESPONSE = 0x40;      // Response from NFCC to commands
 static const uint8_t MT_CTRL_NOTIFICATION = 0x60;  // Notification from NFCC
 
 static const uint8_t GID_MASK = 0x0F;
@@ -63,6 +64,14 @@ static const uint8_t NFCEE_DISCOVER_OID = 0x00;
 static const uint8_t NFCEE_MODE_SET_OID = 0x01;
 
 static const uint8_t PROPRIETARY_GID = 0xF;
+
+static const uint8_t XCHG_DATA_OID = 0x10;
+static const uint8_t MF_SECTORSEL_OID = 0x32;
+static const uint8_t MFC_AUTHENTICATE_OID = 0x40;
+
+static const uint8_t MFC_AUTHENTICATE_PARAM_KS_A = 0x00;  // key select A
+static const uint8_t MFC_AUTHENTICATE_PARAM_KS_B = 0x80;  // key select B
+static const uint8_t MFC_AUTHENTICATE_PARAM_EMBED_KEY = 0x10;
 
 static const uint8_t CORE_CONFIG[] = {0x01,                     // Number of parameters
                                       0x00, 0x02, 0x00, 0x01};  // TOTAL_DURATION: 1ms
@@ -211,6 +220,7 @@ class PN7160 : public Component,
  public:
   void setup() override;
   void dump_config() override;
+  float get_setup_priority() const { return setup_priority::DATA; }
   void loop() override;
 
   void set_dwl_req_pin(GPIOPin *dwl_req_pin) { this->dwl_req_pin_ = dwl_req_pin; }
@@ -218,30 +228,23 @@ class PN7160 : public Component,
   void set_ven_pin(GPIOPin *ven_pin) { this->ven_pin_ = ven_pin; }
   void set_wkup_req_pin(GPIOPin *wkup_req_pin) { this->wkup_req_pin_ = wkup_req_pin; }
 
+  // void register_tag(PN532BinarySensor *tag) { this->binary_sensors_.push_back(tag); }
   void register_ontag_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontag_.push_back(trig); }
+  void register_ontagremoved_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontagremoved_.push_back(trig); }
+
+  void add_on_finished_write_callback(std::function<void()> callback) {
+    this->on_finished_write_callback_.add(std::move(callback));
+  }
+
+  bool is_writing() { return this->next_task_ != EP_READ; };
+
+  void read_mode();
+  void clean_mode();
+  void format_mode();
+  void write_mode(nfc::NdefMessage *message);
 
  protected:
-  /// advance controller state as required
-  void nci_fsm_transition_();
-
-  /// remove "old" cached tags
-  void purge_old_tags_();
-
-  optional<size_t> find_discovery_id_(uint8_t id);
-  optional<size_t> find_tag_uid_(const std::vector<uint8_t> &uid);
-
   void init_failure_handler_();
-
-  bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const std::vector<uint8_t> &data, std::vector<uint8_t> &response,
-                            uint16_t timeout = DEFAULT_TIMEOUT, bool warn = true);
-  bool write_ctrl_and_read_(uint8_t gid, uint8_t oid, const uint8_t *data, const uint8_t len,
-                            std::vector<uint8_t> &response, uint16_t timeout = DEFAULT_TIMEOUT, bool warn = true);
-  bool write_data_and_read_(std::vector<uint8_t> &data, std::vector<uint8_t> &response, uint16_t timeout = 5,
-                            bool warn = true);
-  bool write_and_read_(std::vector<uint8_t> &data, std::vector<uint8_t> &response, uint16_t timeout, bool warn);
-  bool write_data_(const std::vector<uint8_t> &data);
-  bool read_data_(std::vector<uint8_t> &data, uint16_t timeout = DEFAULT_TIMEOUT, bool warn = true);
-  bool wait_for_irq_(uint16_t timeout = DEFAULT_TIMEOUT, bool state = true, bool warn = true);
 
   uint8_t reset_core_(bool reset_config, bool power);
   uint8_t init_core_(bool store_report);
@@ -250,15 +253,62 @@ class PN7160 : public Component,
   uint8_t set_mode_();
 
   uint8_t start_discovery_();
-  bool deactivate_(uint8_t type);
+  uint8_t deactivate_(uint8_t type);
 
-  void select_tag_();
+  void select_endpoint_();
 
-  std::unique_ptr<nfc::NfcTag> build_tag_(uint8_t mode_tech, const std::vector<uint8_t> &data, bool print_uid = false);
-  bool check_for_tag_(std::unique_ptr<nfc::NfcTag> &tag);
+  uint8_t read_endpoint_data_(nfc::NfcTag &tag);
+  uint8_t clean_endpoint_(std::vector<uint8_t> &uid);
+  uint8_t format_endpoint_(std::vector<uint8_t> &uid);
+  uint8_t write_endpoint_(std::vector<uint8_t> &uid, nfc::NdefMessage *message);
 
-  // bool presence_check_();
+  std::unique_ptr<nfc::NfcTag> build_tag_(const uint8_t mode_tech, const std::vector<uint8_t> &data);
+  optional<size_t> find_tag_uid_(const std::vector<uint8_t> &uid);
+  void purge_old_tags_();
+
+  /// advance controller state as required
+  void nci_fsm_transition_();
+  /// parse & process incoming messages from the NFCC
   void process_message_();
+
+  uint8_t write_ctrl_and_read_(const uint8_t gid, const uint8_t oid, const std::vector<uint8_t> &data,
+                               std::vector<uint8_t> &response, const uint16_t timeout = NFCC_DEFAULT_TIMEOUT,
+                               const bool warn = true);
+  uint8_t write_ctrl_and_read_(const uint8_t gid, const uint8_t oid, const uint8_t *data, uint8_t len,
+                               std::vector<uint8_t> &response, const uint16_t timeout = NFCC_DEFAULT_TIMEOUT,
+                               const bool warn = true);
+  uint8_t write_data_and_read_(const std::vector<uint8_t> &data, std::vector<uint8_t> &response,
+                               const uint16_t timeout = NFCC_DEFAULT_TIMEOUT, const bool warn = true);
+  uint8_t write_and_read_(const std::vector<uint8_t> &data, std::vector<uint8_t> &response, const uint16_t timeout,
+                          const bool warn);
+  uint8_t read_data_(std::vector<uint8_t> &data, const uint16_t timeout = NFCC_DEFAULT_TIMEOUT, const bool warn = true);
+  uint8_t write_data_(const std::vector<uint8_t> &data);
+  uint8_t wait_for_irq_(uint16_t timeout = NFCC_DEFAULT_TIMEOUT, bool state = true, bool warn = true);
+
+  uint8_t read_mifare_classic_tag_(nfc::NfcTag &tag);
+  uint8_t read_mifare_classic_block_(const uint8_t block_num, std::vector<uint8_t> &data);
+  uint8_t write_mifare_classic_block_(const uint8_t block_num, std::vector<uint8_t> &data);
+  uint8_t auth_mifare_classic_block_(const uint8_t block_num, const uint8_t key_num, const uint8_t *key);
+  uint8_t sect_to_auth(const uint8_t block_num);
+  uint8_t format_mifare_classic_mifare_();
+  uint8_t format_mifare_classic_ndef_();
+  uint8_t write_mifare_classic_tag_(nfc::NdefMessage *message);
+
+  uint8_t read_mifare_ultralight_tag_(nfc::NfcTag &tag);
+  uint8_t read_mifare_ultralight_bytes_(const uint8_t start_page, const uint16_t num_bytes, std::vector<uint8_t> &data);
+  bool is_mifare_ultralight_formatted_();
+  uint16_t read_mifare_ultralight_capacity_();
+  uint8_t find_mifare_ultralight_ndef_(uint8_t &message_length, uint8_t &message_start_index);
+  uint8_t write_mifare_ultralight_page_(const uint8_t page_num, std::vector<uint8_t> &write_data);
+  uint8_t write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMessage *message);
+  uint8_t clean_mifare_ultralight_();
+
+  enum NfcTask {
+    EP_READ = 0,
+    EP_CLEAN,
+    EP_FORMAT,
+    EP_WRITE,
+  } next_task_{EP_READ};
 
   GPIOPin *dwl_req_pin_;
   GPIOPin *irq_pin_;
@@ -267,14 +317,20 @@ class PN7160 : public Component,
 
   uint8_t fail_count_{0};
   uint8_t generation_{0};
-  uint8_t version_[3];
   uint8_t selecting_endpoint_{0};
+  uint8_t tag_ttl_{250};
+  uint8_t version_[3];
+
+  CallbackManager<void()> on_finished_write_callback_;
 
   std::vector<DiscoveredEndpoint> discovered_endpoint_;
 
   PN7160State state_{PN7160State::NFCC_RESET};
 
+  nfc::NdefMessage *next_task_message_to_write_;
+
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
+  std::vector<nfc::NfcOnTagTrigger *> triggers_ontagremoved_;
 };
 
 }  // namespace pn7160
