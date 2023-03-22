@@ -1,8 +1,9 @@
 #pragma once
 
-#include "esphome/components/spi/spi.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/nfc/automation.h"
 #include "esphome/components/nfc/nfc.h"
+#include "esphome/components/spi/spi.h"
 #include "esphome/core/component.h"
 #include "esphome/core/gpio.h"
 #include "esphome/core/helpers.h"
@@ -214,6 +215,8 @@ struct DiscoveredEndpoint {
   bool trig_called;
 };
 
+class PN7160BinarySensor;
+
 class PN7160 : public Component,
                public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW, spi::CLOCK_PHASE_LEADING,
                                      spi::DATA_RATE_4MHZ> {
@@ -228,7 +231,7 @@ class PN7160 : public Component,
   void set_ven_pin(GPIOPin *ven_pin) { this->ven_pin_ = ven_pin; }
   void set_wkup_req_pin(GPIOPin *wkup_req_pin) { this->wkup_req_pin_ = wkup_req_pin; }
 
-  // void register_tag(PN532BinarySensor *tag) { this->binary_sensors_.push_back(tag); }
+  void register_tag(PN7160BinarySensor *tag) { this->binary_sensors_.push_back(tag); }
   void register_ontag_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontag_.push_back(trig); }
   void register_ontagremoved_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontagremoved_.push_back(trig); }
 
@@ -329,8 +332,39 @@ class PN7160 : public Component,
 
   nfc::NdefMessage *next_task_message_to_write_;
 
+  std::vector<PN7160BinarySensor *> binary_sensors_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontagremoved_;
+};
+
+class PN7160BinarySensor : public binary_sensor::BinarySensor {
+ public:
+  void set_uid(const std::vector<uint8_t> &uid) { uid_ = uid; }
+
+  bool process(std::vector<uint8_t> &data);
+
+  void on_scan_end() {
+    if (!this->found_) {
+      this->publish_state(false);
+    }
+    this->found_ = false;
+  }
+
+ protected:
+  std::vector<uint8_t> uid_;
+  bool found_{false};
+};
+
+class PN7160OnFinishedWriteTrigger : public Trigger<> {
+ public:
+  explicit PN7160OnFinishedWriteTrigger(PN7160 *parent) {
+    parent->add_on_finished_write_callback([this]() { this->trigger(); });
+  }
+};
+
+template<typename... Ts> class PN7160IsWritingCondition : public Condition<Ts...>, public Parented<PN7160> {
+ public:
+  bool check(Ts... x) override { return this->parent_->is_writing(); }
 };
 
 }  // namespace pn7160

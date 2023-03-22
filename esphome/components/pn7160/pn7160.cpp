@@ -342,6 +342,9 @@ optional<size_t> PN7160::find_tag_uid_(const std::vector<uint8_t> &uid) {
 void PN7160::purge_old_tags_() {
   for (size_t i = 0; i < this->discovered_endpoint_.size(); i++) {
     if (millis() - this->discovered_endpoint_[i].last_seen > this->tag_ttl_) {
+      for (auto *trigger : this->triggers_ontagremoved_) {
+        trigger->process(make_unique<nfc::NfcTag>(this->discovered_endpoint_[i].tag));
+      }
       ESP_LOGW(TAG, "Tag %s removed from cache",
                nfc::format_bytes(this->discovered_endpoint_[i].tag.get_uid()).c_str());
       this->discovered_endpoint_.erase(this->discovered_endpoint_.begin() + i);
@@ -781,6 +784,22 @@ uint8_t PN7160::wait_for_irq_(uint16_t timeout, bool state, bool warn) {
       return STATUS_FAILED;
     }
   }
+}
+
+bool PN7160BinarySensor::process(std::vector<uint8_t> &data) {
+  if (data.size() != this->uid_.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < data.size(); i++) {
+    if (data[i] != this->uid_[i]) {
+      return false;
+    }
+  }
+
+  this->publish_state(true);
+  this->found_ = true;
+  return true;
 }
 
 }  // namespace pn7160
