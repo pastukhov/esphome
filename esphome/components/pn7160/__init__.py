@@ -11,6 +11,7 @@ DEPENDENCIES = ["spi"]
 CONF_DWL_REQ_PIN = "dwl_req_pin"
 CONF_IRQ_PIN = "irq_pin"
 CONF_ON_FINISHED_WRITE = "on_finished_write"
+CONF_PN7160_ID = "pn7160_id"
 CONF_TAG_TTL = "tag_ttl"
 CONF_VEN_PIN = "ven_pin"
 CONF_WKUP_REQ_PIN = "wkup_req_pin"

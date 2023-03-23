@@ -15,17 +15,25 @@ void PN7160::setup() {
   this->wkup_req_pin_->setup();
   this->spi_setup();
 
+  for (auto *bs : this->binary_sensors_) {
+    bs->publish_initial_state(false);
+  }
+
   this->nci_fsm_transition_();  // kick off reset & init processes
 }
 
 void PN7160::dump_config() {
   ESP_LOGCONFIG(TAG, "PN7160:");
   LOG_PIN("  CS Pin: ", this->cs_);
+
+  for (auto *child : this->binary_sensors_) {
+    LOG_BINARY_SENSOR("  ", "Tag", child);
+  }
 }
 
 void PN7160::loop() {
-  this->purge_old_tags_();
   this->nci_fsm_transition_();
+  this->purge_old_tags_();
 }
 
 void PN7160::read_mode() {
@@ -131,6 +139,13 @@ uint8_t PN7160::init_core_(const bool store_report) {
 
 uint8_t PN7160::send_config_() {
   std::vector<uint8_t> response;
+
+  if (this->write_ctrl_and_read_(NCI_PROPRIETARY_GID, NCI_CORE_SET_CONFIG_OID, {}, response) != STATUS_OK) {
+    ESP_LOGE(TAG, "Error enabling proprietary extensions");
+    return STATUS_FAILED;
+  }
+
+  response.clear();
 
   if (this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_SET_CONFIG_OID, CORE_CONFIG, sizeof(CORE_CONFIG), response) !=
       STATUS_OK) {
@@ -345,6 +360,9 @@ void PN7160::purge_old_tags_() {
       for (auto *trigger : this->triggers_ontagremoved_) {
         trigger->process(make_unique<nfc::NfcTag>(this->discovered_endpoint_[i].tag));
       }
+      for (auto *bs : this->binary_sensors_) {
+        bs->tag_off(this->discovered_endpoint_[i].tag.get_uid());
+      }
       ESP_LOGW(TAG, "Tag %s removed from cache",
                nfc::format_bytes(this->discovered_endpoint_[i].tag.get_uid()).c_str());
       this->discovered_endpoint_.erase(this->discovered_endpoint_.begin() + i);
@@ -528,9 +546,15 @@ void PN7160::process_message_() {
                     for (auto *trigger : this->triggers_ontag_) {
                       trigger->process(make_unique<nfc::NfcTag>(working_endpoint.tag));
                     }
+                    for (auto *bs : this->binary_sensors_) {
+                      bs->tag_on(working_endpoint.tag.get_uid());
+                    }
                     working_endpoint.trig_called = true;
                     break;
                   }
+              }
+              if (working_endpoint.tag.get_tag_type() == nfc::MIFARE_CLASSIC) {
+                this->halt_mifare_classic_tag_();
               }
             }
             if (this->next_task_ != EP_READ) {
@@ -786,7 +810,7 @@ uint8_t PN7160::wait_for_irq_(uint16_t timeout, bool state, bool warn) {
   }
 }
 
-bool PN7160BinarySensor::process(std::vector<uint8_t> &data) {
+bool PN7160BinarySensor::tag_match(const std::vector<uint8_t> &data) {
   if (data.size() != this->uid_.size()) {
     return false;
   }
@@ -797,8 +821,6 @@ bool PN7160BinarySensor::process(std::vector<uint8_t> &data) {
     }
   }
 
-  this->publish_state(true);
-  this->found_ = true;
   return true;
 }
 

@@ -296,5 +296,17 @@ uint8_t PN7160::write_mifare_classic_tag_(nfc::NdefMessage *message) {
   return STATUS_OK;
 }
 
+uint8_t PN7160::halt_mifare_classic_tag_() {
+  std::vector<uint8_t> data_out = {XCHG_DATA_OID, nfc::MIFARE_CMD_HALT, 0};
+  std::vector<uint8_t> response;
+
+  ESP_LOGVV(TAG, "Halt XCHG_DATA_REQ: %s", nfc::format_bytes(data_out).c_str());
+  if (this->write_data_and_read_(data_out, response, NFCC_MFC_TIMEOUT, false) != STATUS_OK) {
+    ESP_LOGE(TAG, "Sending halt XCHG_DATA_REQ failed");
+    return STATUS_FAILED;
+  }
+  return STATUS_OK;
+}
+
 }  // namespace pn7160
 }  // namespace esphome

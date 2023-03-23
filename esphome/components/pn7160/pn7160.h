@@ -15,7 +15,7 @@ namespace pn7160 {
 
 static const uint8_t NFCC_DEFAULT_TIMEOUT = 5;
 static const uint8_t NFCC_INIT_TIMEOUT = 50;
-static const uint8_t NFCC_MFC_TIMEOUT = 10;
+static const uint8_t NFCC_MFC_TIMEOUT = 15;
 
 static const uint8_t NFCC_MAX_COMM_FAILS = 2;
 
@@ -33,6 +33,7 @@ static const uint8_t GID_MASK = 0x0F;
 static const uint8_t OID_MASK = 0x3F;
 
 static const uint8_t NCI_CORE_GID = 0x0;
+static const uint8_t NCI_PROPRIETARY_GID = 0xF;
 
 static const uint8_t NCI_CORE_RESET_OID = 0x00;
 static const uint8_t NCI_CORE_INIT_OID = 0x01;
@@ -63,8 +64,6 @@ static const uint8_t NFCEE_GID = 0x2;
 
 static const uint8_t NFCEE_DISCOVER_OID = 0x00;
 static const uint8_t NFCEE_MODE_SET_OID = 0x01;
-
-static const uint8_t PROPRIETARY_GID = 0xF;
 
 static const uint8_t XCHG_DATA_OID = 0x10;
 static const uint8_t MF_SECTORSEL_OID = 0x32;
@@ -298,6 +297,7 @@ class PN7160 : public Component,
   uint8_t format_mifare_classic_mifare_();
   uint8_t format_mifare_classic_ndef_();
   uint8_t write_mifare_classic_tag_(nfc::NdefMessage *message);
+  uint8_t halt_mifare_classic_tag_();
 
   uint8_t read_mifare_ultralight_tag_(nfc::NfcTag &tag);
   uint8_t read_mifare_ultralight_bytes_(const uint8_t start_page, const uint16_t num_bytes, std::vector<uint8_t> &data);
@@ -343,18 +343,22 @@ class PN7160BinarySensor : public binary_sensor::BinarySensor {
  public:
   void set_uid(const std::vector<uint8_t> &uid) { uid_ = uid; }
 
-  bool process(std::vector<uint8_t> &data);
+  bool tag_match(const std::vector<uint8_t> &data);
 
-  void on_scan_end() {
-    if (!this->found_) {
+  void tag_off(const std::vector<uint8_t> &data) {
+    if (this->tag_match(data)) {
       this->publish_state(false);
     }
-    this->found_ = false;
+  }
+
+  void tag_on(const std::vector<uint8_t> &data) {
+    if (this->tag_match(data)) {
+      this->publish_state(true);
+    }
   }
 
  protected:
   std::vector<uint8_t> uid_;
-  bool found_{false};
 };
 
 class PN7160OnFinishedWriteTrigger : public Trigger<> {
