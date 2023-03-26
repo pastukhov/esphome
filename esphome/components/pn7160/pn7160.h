@@ -13,6 +13,15 @@
 namespace esphome {
 namespace pn7160 {
 
+static const char NDEF_MESSAGE[] = {
+    0xD1,  // MB/ME/CF/SR/IL/TNF (well-known)
+    1,     // type length
+    28,    // payload length
+    'U',   // type...payload follows below
+    0x02, 'h', 'o', 'm', 'e', '-', 'a', 's', 's', 'i', 's', 't', 'a', 'n',
+    't',  '.', 'i', 'o', '/', 't', 'a', 'g', '/', 'p', 'u', 'l', 's', 'e',
+};
+
 static const uint8_t NFCC_DEFAULT_TIMEOUT = 5;
 static const uint8_t NFCC_INIT_TIMEOUT = 50;
 static const uint8_t NFCC_MFC_TIMEOUT = 15;
@@ -73,58 +82,10 @@ static const uint8_t MFC_AUTHENTICATE_PARAM_KS_A = 0x00;  // key select A
 static const uint8_t MFC_AUTHENTICATE_PARAM_KS_B = 0x80;  // key select B
 static const uint8_t MFC_AUTHENTICATE_PARAM_EMBED_KEY = 0x10;
 
-static const uint8_t CORE_CONFIG[] = {0x01,                     // Number of parameters
-                                      0x00, 0x02, 0x00, 0x01};  // TOTAL_DURATION: 1ms
-
-static const uint8_t CORE_CONF_EXTENSION[] = {
-    0x03,                     // Number of parameters
-    0xA0, 0x40, 0x01, 0x00,   // TAG_DETECTOR_CFG: Default
-    0xA0, 0x41, 0x01, 0x04,   // TAG_DETECTOR_THRESHOLD_CFG: Default
-    0xA0, 0x43, 0x01, 0x00};  // TAG_DETECTOR_FALLBACK_CNT_CFG: Hybrid mode disabled
-
-static const uint8_t CLOCK_CONFIG[] = {0x01,                     // Number of parameters
-                                       0xA0, 0x03, 0x01, 0x08};  // CLOCK_SEL_CFG: XTAL: 27.12MHz
-
-static const uint8_t RF_CONF[] = {0x11,                                                   // Number of parameters
-                                  0xA0, 0x0D, 0x06, 0x04, 0x35, 0x90, 0x01, 0xF4, 0x01,   //
-                                  0xA0, 0x0D, 0x06, 0x06, 0x30, 0x01, 0x90, 0x03, 0x00,   //
-                                  0xA0, 0x0D, 0x06, 0x06, 0x42, 0x02, 0x00, 0xFF, 0xFF,   //
-                                  0xA0, 0x0D, 0x06, 0x20, 0x42, 0x88, 0x00, 0xFF, 0xFF,   //
-                                  0xA0, 0x0D, 0x04, 0x22, 0x44, 0x23, 0x00,               //
-                                  0xA0, 0x0D, 0x06, 0x22, 0x2D, 0x50, 0x34, 0x0C, 0x00,   //
-                                  0xA0, 0x0D, 0x06, 0x32, 0x42, 0xF8, 0x00, 0xFF, 0xFF,   //
-                                  0xA0, 0x0D, 0x06, 0x34, 0x2D, 0x24, 0x37, 0x0C, 0x00,   //
-                                  0xA0, 0x0D, 0x06, 0x34, 0x33, 0x86, 0x80, 0x00, 0x70,   //
-                                  0xA0, 0x0D, 0x04, 0x34, 0x44, 0x22, 0x00,               //
-                                  0xA0, 0x0D, 0x06, 0x42, 0x2D, 0x15, 0x45, 0x0D, 0x00,   //
-                                  0xA0, 0x0D, 0x04, 0x46, 0x44, 0x22, 0x00,               //
-                                  0xA0, 0x0D, 0x06, 0x46, 0x2D, 0x05, 0x59, 0x0E, 0x00,   //
-                                  0xA0, 0x0D, 0x06, 0x44, 0x42, 0x88, 0x00, 0xFF, 0xFF,   //
-                                  0xA0, 0x0D, 0x06, 0x56, 0x2D, 0x05, 0x9F, 0x0C, 0x00,   //
-                                  0xA0, 0x0D, 0x06, 0x54, 0x42, 0x88, 0x00, 0xFF, 0xFF,   //
-                                  0xA0, 0x0D, 0x06, 0x0A, 0x33, 0x80, 0x86, 0x00, 0x70};  //
-
-static const uint8_t RF_TVDD_CONFIG[] = {
-    0x01,        // Number of parameters
-    0xA0, 0x0E,  // ext. tag
-    11,          // length
-    0x11,        // IRQ Enable: PVDD + temp sensor IRQs
-    0x01,        // RFU
-    0x01,        // Power and Clock Configuration, device on (CFG1)
-    0x01,        // Power and Clock Configuration, device off (CFG1)
-    0x00,        // RFU
-    0x00,        // DC-DC 0
-    0x00,        // DC-DC 1
-    // 0x14,        // TXLDO (3.3V / 4.75V)
-    // 0xBB,  // TXLDO (4.7V / 4.7V)
-    0xFF,  // TXLDO (5.0V / 5.0V)
-    0x00,  // RFU
-    0xD0,  // TXLDO check
-    0x0C,  // RFU
-};
-
+static const uint8_t MODE_MASK = 0xF0;
 static const uint8_t MODE_LISTEN = 0x80;
 static const uint8_t MODE_POLL = 0x00;
+
 static const uint8_t TECH_PASSIVE_NFCA = 0;
 static const uint8_t TECH_PASSIVE_NFCB = 1;
 static const uint8_t TECH_PASSIVE_NFCF = 2;
@@ -138,7 +99,7 @@ static const uint8_t PROT_T2T = 0x02;
 static const uint8_t PROT_T3T = 0x03;
 static const uint8_t PROT_ISODEP = 0x04;
 static const uint8_t PROT_NFCDEP = 0x05;
-static const uint8_t PROT_ISO15693 = 0x06;
+static const uint8_t PROT_T5T = 0x06;
 static const uint8_t PROT_MIFARE = 0x80;
 
 static const uint8_t RF_DISCOVER_MAP_MODE_POLL = 0x1;
@@ -149,17 +110,6 @@ static const uint8_t INTF_FRAME = 0x1;
 static const uint8_t INTF_ISODEP = 0x2;
 static const uint8_t INTF_NFCDEP = 0x3;
 static const uint8_t INTF_TAGCMD = 0x80;
-
-static const uint8_t READ_WRITE_MODE[] = {PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // Poll mode
-                                          PROT_T2T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // Poll mode
-                                          PROT_T3T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // Poll mode
-                                          PROT_ISODEP, RF_DISCOVER_MAP_MODE_POLL, INTF_ISODEP,   // Poll mode
-                                          PROT_MIFARE, RF_DISCOVER_MAP_MODE_POLL, INTF_TAGCMD};  // Poll mode
-
-static const uint8_t DISCOVERY_READ_WRITE[] = {MODE_POLL | TECH_PASSIVE_NFCA,    //
-                                               MODE_POLL | TECH_PASSIVE_NFCB,    //
-                                               MODE_POLL | TECH_PASSIVE_NFCF,    //
-                                               MODE_POLL | TECH_PASSIVE_15693};  //
 
 static const uint8_t DEACTIVATION_TYPE_IDLE = 0x00;
 static const uint8_t DEACTIVATION_TYPE_SLEEP = 0x01;
@@ -184,26 +134,119 @@ static const uint8_t RF_DISCOVER_NTF_NT_LAST = 0x00;
 static const uint8_t RF_DISCOVER_NTF_NT_LAST_RL = 0x01;
 static const uint8_t RF_DISCOVER_NTF_NT_MORE = 0x02;
 
-enum class PN7160State : uint8_t {
+static const uint8_t CARD_EMU_T4T_APP_SELECT[] = {0x00, 0xA4, 0x04, 0x00, 0x07, 0xD2, 0x76,
+                                                  0x00, 0x00, 0x85, 0x01, 0x01, 0x00};
+static const uint8_t CARD_EMU_T4T_CC[] = {0x00, 0x0F, 0x20, 0x00, 0xFF, 0x00, 0xFF, 0x04,
+                                          0x06, 0xE1, 0x04, 0x00, 0xFF, 0x00, 0x00};
+static const uint8_t CARD_EMU_T4T_CC_SELECT[] = {0x00, 0xA4, 0x00, 0x0C, 0x02, 0xE1, 0x03};
+static const uint8_t CARD_EMU_T4T_NDEF_SELECT[] = {0x00, 0xA4, 0x00, 0x0C, 0x02, 0xE1, 0x04};
+static const uint8_t CARD_EMU_T4T_READ[] = {0x00, 0xB0};
+static const uint8_t CARD_EMU_T4T_WRITE[] = {0x00, 0xD6};
+static const uint8_t CARD_EMU_T4T_OK[] = {0x90, 0x00};
+static const uint8_t CARD_EMU_T4T_NOK[] = {0x6A, 0x82};
+
+static const uint8_t CORE_CONFIG[] = {0x01,   // Number of parameter fields
+                                      0x00,   // config param identifier (TOTAL_DURATION)
+                                      0x02,   // length of value
+                                      0xF8,   // TOTAL_DURATION (low)...
+                                      0x02};  // TOTAL_DURATION (high): 760ms
+
+static const uint8_t PMU_CFG[] = {
+    0x01,        // Number of parameters
+    0xA0, 0x0E,  // ext. tag
+    11,          // length
+    0x11,        // IRQ Enable: PVDD + temp sensor IRQs
+    0x01,        // RFU
+    0x01,        // Power and Clock Configuration, device on (CFG1)
+    0x01,        // Power and Clock Configuration, device off (CFG1)
+    0x00,        // RFU
+    0x00,        // DC-DC 0
+    0x00,        // DC-DC 1
+    // 0x14,        // TXLDO (3.3V / 4.75V)
+    // 0xBB,        // TXLDO (4.7V / 4.7V)
+    0xFF,  // TXLDO (5.0V / 5.0V)
+    0x00,  // RFU
+    0xD0,  // TXLDO check
+    0x0C,  // RFU
+};
+
+static const uint8_t RF_DISCOVER_MAP_LISTEN_CONFIG[] = {     // listen modes
+    PROT_ISODEP, RF_DISCOVER_MAP_MODE_LISTEN, INTF_ISODEP};  // listen mode
+
+static const uint8_t RF_DISCOVER_MAP_POLL_CONFIG[] = {     // poll modes
+    PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // poll mode
+    PROT_T2T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // poll mode
+    PROT_T3T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // poll mode
+    PROT_ISODEP, RF_DISCOVER_MAP_MODE_POLL, INTF_ISODEP,   // poll mode
+    PROT_MIFARE, RF_DISCOVER_MAP_MODE_POLL, INTF_TAGCMD};  // poll mode
+
+static const uint8_t RF_DISCOVER_MAP_CONFIG[] = {  // poll modes
+    PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL,
+    INTF_FRAME,  // poll mode
+    PROT_T2T,    RF_DISCOVER_MAP_MODE_POLL,
+    INTF_FRAME,  // poll mode
+    PROT_T3T,    RF_DISCOVER_MAP_MODE_POLL,
+    INTF_FRAME,  // poll mode
+    PROT_ISODEP, RF_DISCOVER_MAP_MODE_POLL | RF_DISCOVER_MAP_MODE_LISTEN,
+    INTF_ISODEP,  // poll & listen mode
+    PROT_MIFARE, RF_DISCOVER_MAP_MODE_POLL,
+    INTF_TAGCMD};  // poll mode
+
+static const uint8_t RF_DISCOVERY_LISTEN_CONFIG[] = {MODE_LISTEN | TECH_PASSIVE_NFCA,   // listen mode
+                                                     MODE_LISTEN | TECH_PASSIVE_NFCB,   // listen mode
+                                                     MODE_LISTEN | TECH_PASSIVE_NFCF};  // listen mode
+
+static const uint8_t RF_DISCOVERY_POLL_CONFIG[] = {MODE_POLL | TECH_PASSIVE_NFCA,    // poll mode
+                                                   MODE_POLL | TECH_PASSIVE_NFCB,    // poll mode
+                                                   MODE_POLL | TECH_PASSIVE_NFCF,    // poll mode
+                                                   MODE_POLL | TECH_PASSIVE_15693};  // poll mode
+
+static const uint8_t RF_DISCOVERY_CONFIG[] = {MODE_POLL | TECH_PASSIVE_NFCA,     // poll mode
+                                              MODE_POLL | TECH_PASSIVE_NFCB,     // poll mode
+                                              MODE_POLL | TECH_PASSIVE_NFCF,     // poll mode
+                                              MODE_POLL | TECH_PASSIVE_15693,    // poll mode
+                                              MODE_LISTEN | TECH_PASSIVE_NFCA,   // listen mode
+                                              MODE_LISTEN | TECH_PASSIVE_NFCB,   // listen mode
+                                              MODE_LISTEN | TECH_PASSIVE_NFCF};  // listen mode
+
+static const uint8_t RF_LISTEN_MODE_ROUTING_CONFIG[] = {0x00,  // "more" (another message is coming)
+                                                        2,     // number of table entries
+                                                        0x01,  // type = protocol-based
+                                                        3,     // length
+                                                        0,     // DH NFCEE ID, a static ID representing the DH-NFCEE
+                                                        0x07,  // power state
+                                                        PROT_ISODEP,  // protocol
+                                                        0x00,         // type = technology-based
+                                                        3,            // length
+                                                        0,     // DH NFCEE ID, a static ID representing the DH-NFCEE
+                                                        0x07,  // power state
+                                                        TECH_PASSIVE_NFCA};  // technology
+
+enum class CardEmulationState : uint8_t {
+  CARD_EMU_IDLE,
+  CARD_EMU_NDEF_APP_SELECTED,
+  CARD_EMU_CC_SELECTED,
+  CARD_EMU_NDEF_SELECTED,
+  CARD_EMU_DESFIRE_PROD,
+};
+
+enum class NCIState : uint8_t {
   NONE = 0x00,
   NFCC_RESET,
   NFCC_INIT,
   NFCC_CONFIG,
-  NFCC_SET_MODE,
+  NFCC_SET_DISCOVER_MAP,
+  NFCC_SET_LISTEN_MODE_ROUTING,
   RFST_IDLE,
   RFST_DISCOVERY,
   RFST_W4_ALL_DISCOVERIES,
   RFST_W4_HOST_SELECT,
+  RFST_LISTEN_ACTIVE,
+  RFST_LISTEN_SLEEP,
   RFST_POLL_ACTIVE,
   EP_DEACTIVATING,
   EP_SELECTING,
   FAILED = 0XFF,
-};
-
-enum PN7160Mode : uint8_t {
-  CARD_EMULATION = 1 << 0,
-  P2P = 1 << 1,
-  READ_WRITE = 1 << 2,
 };
 
 struct DiscoveredEndpoint {
@@ -254,7 +297,9 @@ class PN7160 : public Component,
   uint8_t init_core_(bool store_report);
   uint8_t send_config_();
 
-  uint8_t set_mode_();
+  uint8_t set_discover_map_();
+
+  uint8_t set_listen_mode_routing_();
 
   uint8_t start_discovery_();
   uint8_t deactivate_(uint8_t type);
@@ -272,8 +317,16 @@ class PN7160 : public Component,
 
   /// advance controller state as required
   void nci_fsm_transition_();
+  /// set new controller state
+  void nci_fsm_set_state_(NCIState new_state);
   /// parse & process incoming messages from the NFCC
   void process_message_();
+  void process_rf_intf_activated_oid_(std::vector<uint8_t> &response);
+  void process_rf_discover_oid_(std::vector<uint8_t> &response);
+  void process_rf_deactivate_oid_(std::vector<uint8_t> &response);
+  void process_data_message_(std::vector<uint8_t> &response);
+
+  void card_emu_t4t_get_response(std::vector<uint8_t> &response, std::vector<uint8_t> &ndef_response);
 
   uint8_t write_ctrl_and_read_(const uint8_t gid, const uint8_t oid, const std::vector<uint8_t> &data,
                                std::vector<uint8_t> &response, const uint16_t timeout = NFCC_DEFAULT_TIMEOUT,
@@ -308,29 +361,37 @@ class PN7160 : public Component,
   uint8_t write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMessage *message);
   uint8_t clean_mifare_ultralight_();
 
-  enum NfcTask {
+  enum NfcTask : uint8_t {
     EP_READ = 0,
     EP_CLEAN,
     EP_FORMAT,
     EP_WRITE,
   } next_task_{EP_READ};
 
+  bool listening_enabled_{true};
+  bool polling_enabled_{true};
+
+  uint8_t fail_count_{0};
+  uint32_t last_nci_state_change_{0};
+  uint8_t selecting_endpoint_{0};
+  uint32_t tag_ttl_{250};
+
+  uint8_t hw_version_{0};
+  uint8_t rom_code_version_{0};
+  uint8_t flash_major_version_{0};
+  uint8_t flash_minor_version_{0};
+
   GPIOPin *dwl_req_pin_;
   GPIOPin *irq_pin_;
   GPIOPin *ven_pin_;
   GPIOPin *wkup_req_pin_;
 
-  uint8_t fail_count_{0};
-  uint8_t generation_{0};
-  uint8_t selecting_endpoint_{0};
-  uint32_t tag_ttl_{250};
-  uint8_t version_[3];
-
   CallbackManager<void()> on_finished_write_callback_;
 
   std::vector<DiscoveredEndpoint> discovered_endpoint_;
 
-  PN7160State state_{PN7160State::NFCC_RESET};
+  CardEmulationState ce_state_{CardEmulationState::CARD_EMU_IDLE};
+  NCIState nci_state_{NCIState::NFCC_RESET};
 
   nfc::NdefMessage *next_task_message_to_write_;
 

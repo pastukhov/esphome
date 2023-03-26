@@ -27,7 +27,8 @@ uint8_t PN7160::read_mifare_ultralight_tag_(nfc::NfcTag &tag) {
   }
 
   std::vector<uint8_t> data;
-  if (read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE, message_length, data) != STATUS_OK) {
+  if (read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE, message_length + message_start_index,
+                                    data) != STATUS_OK) {
     ESP_LOGE(TAG, "Error reading tag data");
     return STATUS_FAILED;
   }
