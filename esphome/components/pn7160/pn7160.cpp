@@ -36,6 +36,42 @@ void PN7160::loop() {
   this->purge_old_tags_();
 }
 
+void PN7160::set_tag_to_emulate(std::shared_ptr<nfc::NdefMessage> message) {
+  this->card_emulation_message_ = message;
+  ESP_LOGD(TAG, "Tag emulation message set");
+}
+
+void PN7160::set_tag_emulation_off() {
+  this->listening_enabled_ = false;
+  this->config_update_pending_ = true;
+  if (this->nci_state_ == NCIState::RFST_DISCOVERY) {
+    if (this->deactivate_(DEACTIVATION_TYPE_IDLE, NFCC_FULL_TIMEOUT) == STATUS_OK) {
+      this->nci_fsm_set_state_(NCIState::RFST_IDLE);
+    } else {
+      this->nci_fsm_set_state_(NCIState::NFCC_RESET);
+    }
+  }
+  ESP_LOGD(TAG, "Tag emulation disabled");
+}
+
+void PN7160::set_tag_emulation_on() {
+  if (this->card_emulation_message_ == nullptr) {
+    ESP_LOGE(TAG, "No NDEF message is set; tag emulation cannot be enabled");
+    return;
+  }
+
+  this->listening_enabled_ = true;
+  this->config_update_pending_ = true;
+  if (this->nci_state_ == NCIState::RFST_DISCOVERY) {
+    if (this->deactivate_(DEACTIVATION_TYPE_IDLE, NFCC_FULL_TIMEOUT) == STATUS_OK) {
+      this->nci_fsm_set_state_(NCIState::RFST_IDLE);
+    } else {
+      this->nci_fsm_set_state_(NCIState::NFCC_RESET);
+    }
+  }
+  ESP_LOGD(TAG, "Tag emulation enabled");
+}
+
 void PN7160::read_mode() {
   this->next_task_ = EP_READ;
   ESP_LOGD(TAG, "Waiting to read next tag");
@@ -91,7 +127,7 @@ uint8_t PN7160::reset_core_(const bool reset_config, const bool power) {
     write_data.push_back(0x00);
   }
 
-  if (this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_RESET_OID, write_data, response, NFCC_INIT_TIMEOUT) !=
+  if (this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_RESET_OID, write_data, response, NFCC_FULL_TIMEOUT) !=
       STATUS_OK) {
     ESP_LOGE(TAG, "Error sending reset command");
     return STATUS_FAILED;
@@ -151,7 +187,7 @@ uint8_t PN7160::init_core_(const bool store_report) {
   return response[3];
 }
 
-uint8_t PN7160::send_config_() {
+uint8_t PN7160::send_init_config_() {
   std::vector<uint8_t> response;
 
   if (this->write_ctrl_and_read_(NCI_PROPRIETARY_GID, NCI_CORE_SET_CONFIG_OID, {}, response) != STATUS_OK) {
@@ -161,17 +197,28 @@ uint8_t PN7160::send_config_() {
 
   response.clear();
 
-  if (this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_SET_CONFIG_OID, CORE_CONFIG, sizeof(CORE_CONFIG), response) !=
-      STATUS_OK) {
-    ESP_LOGE(TAG, "Error sending core config");
-    return STATUS_FAILED;
-  }
-
-  response.clear();
-
   if (this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_SET_CONFIG_OID, PMU_CFG, sizeof(PMU_CFG), response) !=
       STATUS_OK) {
     ESP_LOGE(TAG, "Error sending PMU config");
+    return STATUS_FAILED;
+  }
+
+  return this->send_core_config_();
+}
+
+uint8_t PN7160::send_core_config_() {
+  const uint8_t *core_config = CORE_CONFIG_SOLO;
+  uint8_t core_config_length = sizeof(CORE_CONFIG_SOLO);
+  std::vector<uint8_t> response;
+
+  if (this->listening_enabled_ && this->polling_enabled_) {
+    core_config = CORE_CONFIG_RW_CE;
+    core_config_length = sizeof(CORE_CONFIG_RW_CE);
+  }
+
+  if (this->write_ctrl_and_read_(NCI_CORE_GID, NCI_CORE_SET_CONFIG_OID, core_config, core_config_length, response) !=
+      STATUS_OK) {
+    ESP_LOGE(TAG, "Error sending core config");
     return STATUS_FAILED;
   }
 
@@ -233,9 +280,9 @@ uint8_t PN7160::start_discovery_() {
   return STATUS_OK;
 }
 
-uint8_t PN7160::deactivate_(const uint8_t type) {
+uint8_t PN7160::deactivate_(const uint8_t type, const uint16_t timeout) {
   std::vector<uint8_t> response;
-  if (this->write_ctrl_and_read_(RF_GID, RF_DEACTIVATE_OID, {type}, response) != STATUS_OK) {
+  if (this->write_ctrl_and_read_(RF_GID, RF_DEACTIVATE_OID, {type}, response, timeout) != STATUS_OK) {
     ESP_LOGE(TAG, "Error sending deactivate");
     return STATUS_FAILED;
   }
@@ -410,10 +457,11 @@ void PN7160::nci_fsm_transition_() {
       // fall through
 
     case NCIState::NFCC_CONFIG:
-      if (this->send_config_() != STATUS_OK) {
-        ESP_LOGE(TAG, "Failed to send config");
+      if (this->send_init_config_() != STATUS_OK) {
+        ESP_LOGE(TAG, "Failed to send initial config");
         this->init_failure_handler_();
       } else {
+        this->config_update_pending_ = false;
         this->nci_fsm_set_state_(NCIState::NFCC_SET_DISCOVER_MAP);
       }
       // fall through
@@ -435,6 +483,13 @@ void PN7160::nci_fsm_transition_() {
       // fall through
 
     case NCIState::RFST_IDLE:
+      if (this->config_update_pending_) {
+        if (this->send_core_config_() != STATUS_OK) {
+          ESP_LOGE(TAG, "Failed to update core config");
+        } else {
+          this->config_update_pending_ = false;
+        }
+      }
       if (this->start_discovery_() != STATUS_OK) {
         ESP_LOGE(TAG, "Failed to start discovery polling");
       } else {
@@ -726,8 +781,10 @@ void PN7160::process_rf_deactivate_oid_(std::vector<uint8_t> &response) {
     case DEACTIVATION_TYPE_SLEEP_AF:
       if (this->nci_state_ == NCIState::RFST_LISTEN_ACTIVE) {
         this->nci_fsm_set_state_(NCIState::RFST_LISTEN_SLEEP);
-      } else {
+      } else if (this->nci_state_ == NCIState::RFST_POLL_ACTIVE) {
         this->nci_fsm_set_state_(NCIState::RFST_W4_HOST_SELECT);
+      } else {
+        this->nci_fsm_set_state_(NCIState::RFST_IDLE);
       }
       break;
 
@@ -743,6 +800,10 @@ void PN7160::process_data_message_(std::vector<uint8_t> &response) {
   this->card_emu_t4t_get_response(response, ndef_response);
 
   uint16_t ndef_response_size = ndef_response.size();
+  if (!ndef_response_size) {
+    return;  // no message returned, we cannot respond
+  }
+
   std::vector<uint8_t> write_data{MT_DATA, uint8_t((ndef_response_size & 0xFF00) >> 8),
                                   uint8_t(ndef_response_size & 0x00FF)};
   write_data.insert(write_data.end(), ndef_response.begin(), ndef_response.end());
@@ -753,6 +814,12 @@ void PN7160::process_data_message_(std::vector<uint8_t> &response) {
 
 void PN7160::card_emu_t4t_get_response(std::vector<uint8_t> &response, std::vector<uint8_t> &ndef_response) {
   const uint8_t MSG_OFFSET = 3;
+
+  if (this->card_emulation_message_ == nullptr) {
+    ESP_LOGE(TAG, "No NDEF message is set; tag emulation not possible");
+    ndef_response.clear();
+    return;
+  }
 
   if (equal(response.begin() + MSG_OFFSET, response.end(), std::begin(CARD_EMU_T4T_APP_SELECT))) {
     // CARD_EMU_T4T_APP_SELECT
@@ -788,9 +855,12 @@ void PN7160::card_emu_t4t_get_response(std::vector<uint8_t> &response, std::vect
     } else if (this->ce_state_ == CardEmulationState::CARD_EMU_NDEF_SELECTED) {
       // CARD_EMU_T4T_READ with CARD_EMU_NDEF_SELECTED
       ESP_LOGVV(TAG, "CARD_EMU_T4T_READ with CARD_EMU_NDEF_SELECTED");
-      uint16_t ndef_msg_size = sizeof(NDEF_MESSAGE);
+      auto ndef_message = this->card_emulation_message_->encode();
+      uint16_t ndef_msg_size = ndef_message.size();
       uint16_t offset = (response[MSG_OFFSET + 2] << 8) + response[MSG_OFFSET + 3];
       uint8_t length = response[MSG_OFFSET + 4];
+
+      ESP_LOGVV(TAG, "Encoded NDEF message: %s", nfc::format_bytes(ndef_message).c_str());
 
       if (length <= (ndef_msg_size + offset + 2)) {
         if (offset == 0) {
@@ -798,16 +868,16 @@ void PN7160::card_emu_t4t_get_response(std::vector<uint8_t> &response, std::vect
           ndef_response[0] = (ndef_msg_size & 0xFF00) >> 8;
           ndef_response[1] = (ndef_msg_size & 0x00FF);
           if (length > 2) {
-            ndef_response.insert(ndef_response.end(), std::begin(NDEF_MESSAGE), std::begin(NDEF_MESSAGE) + length - 2);
+            ndef_response.insert(ndef_response.end(), ndef_message.begin(), ndef_message.begin() + length - 2);
           }
         } else if (offset == 1) {
           ndef_response.resize(1);
           ndef_response[0] = (ndef_msg_size & 0x00FF);
           if (length > 1) {
-            ndef_response.insert(ndef_response.end(), std::begin(NDEF_MESSAGE), std::begin(NDEF_MESSAGE) + length - 1);
+            ndef_response.insert(ndef_response.end(), ndef_message.begin(), ndef_message.begin() + length - 1);
           }
         } else {
-          ndef_response.insert(ndef_response.end(), std::begin(NDEF_MESSAGE), std::begin(NDEF_MESSAGE) + length);
+          ndef_response.insert(ndef_response.end(), ndef_message.begin(), ndef_message.begin() + length);
         }
 
         ndef_response.insert(ndef_response.end(), std::begin(CARD_EMU_T4T_OK), std::end(CARD_EMU_T4T_OK));

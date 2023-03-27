@@ -13,18 +13,10 @@
 namespace esphome {
 namespace pn7160 {
 
-static const char NDEF_MESSAGE[] = {
-    0xD1,  // MB/ME/CF/SR/IL/TNF (well-known)
-    1,     // type length
-    28,    // payload length
-    'U',   // type...payload follows below
-    0x02, 'h', 'o', 'm', 'e', '-', 'a', 's', 's', 'i', 's', 't', 'a', 'n',
-    't',  '.', 'i', 'o', '/', 't', 'a', 'g', '/', 'p', 'u', 'l', 's', 'e',
-};
-
-static const uint8_t NFCC_DEFAULT_TIMEOUT = 5;
-static const uint8_t NFCC_INIT_TIMEOUT = 50;
-static const uint8_t NFCC_MFC_TIMEOUT = 15;
+static const uint16_t NFCC_DEFAULT_TIMEOUT = 5;
+static const uint16_t NFCC_FULL_TIMEOUT = 1000;
+static const uint16_t NFCC_INIT_TIMEOUT = 50;
+static const uint16_t NFCC_MFC_TIMEOUT = 15;
 
 static const uint8_t NFCC_MAX_COMM_FAILS = 2;
 
@@ -145,11 +137,17 @@ static const uint8_t CARD_EMU_T4T_WRITE[] = {0x00, 0xD6};
 static const uint8_t CARD_EMU_T4T_OK[] = {0x90, 0x00};
 static const uint8_t CARD_EMU_T4T_NOK[] = {0x6A, 0x82};
 
-static const uint8_t CORE_CONFIG[] = {0x01,   // Number of parameter fields
-                                      0x00,   // config param identifier (TOTAL_DURATION)
-                                      0x02,   // length of value
-                                      0xF8,   // TOTAL_DURATION (low)...
-                                      0x02};  // TOTAL_DURATION (high): 760ms
+static const uint8_t CORE_CONFIG_SOLO[] = {0x01,   // Number of parameter fields
+                                           0x00,   // config param identifier (TOTAL_DURATION)
+                                           0x02,   // length of value
+                                           0x01,   // TOTAL_DURATION (low)...
+                                           0x00};  // TOTAL_DURATION (high): 1 ms
+
+static const uint8_t CORE_CONFIG_RW_CE[] = {0x01,   // Number of parameter fields
+                                            0x00,   // config param identifier (TOTAL_DURATION)
+                                            0x02,   // length of value
+                                            0xF8,   // TOTAL_DURATION (low)...
+                                            0x02};  // TOTAL_DURATION (high): 760 ms
 
 static const uint8_t PMU_CFG[] = {
     0x01,        // Number of parameters
@@ -169,16 +167,6 @@ static const uint8_t PMU_CFG[] = {
     0xD0,  // TXLDO check
     0x0C,  // RFU
 };
-
-static const uint8_t RF_DISCOVER_MAP_LISTEN_CONFIG[] = {     // listen modes
-    PROT_ISODEP, RF_DISCOVER_MAP_MODE_LISTEN, INTF_ISODEP};  // listen mode
-
-static const uint8_t RF_DISCOVER_MAP_POLL_CONFIG[] = {     // poll modes
-    PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // poll mode
-    PROT_T2T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // poll mode
-    PROT_T3T,    RF_DISCOVER_MAP_MODE_POLL, INTF_FRAME,    // poll mode
-    PROT_ISODEP, RF_DISCOVER_MAP_MODE_POLL, INTF_ISODEP,   // poll mode
-    PROT_MIFARE, RF_DISCOVER_MAP_MODE_POLL, INTF_TAGCMD};  // poll mode
 
 static const uint8_t RF_DISCOVER_MAP_CONFIG[] = {  // poll modes
     PROT_T1T,    RF_DISCOVER_MAP_MODE_POLL,
@@ -274,6 +262,10 @@ class PN7160 : public Component,
   void set_wkup_req_pin(GPIOPin *wkup_req_pin) { this->wkup_req_pin_ = wkup_req_pin; }
 
   void set_tag_ttl(uint32_t ttl) { this->tag_ttl_ = ttl; }
+  void set_tag_to_emulate(std::shared_ptr<nfc::NdefMessage> message);
+  void set_tag_emulation_off();
+  void set_tag_emulation_on();
+  bool tag_emulation_enabled() { return this->listening_enabled_; }
 
   void register_tag(PN7160BinarySensor *tag) { this->binary_sensors_.push_back(tag); }
   void register_ontag_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontag_.push_back(trig); }
@@ -295,14 +287,15 @@ class PN7160 : public Component,
 
   uint8_t reset_core_(bool reset_config, bool power);
   uint8_t init_core_(bool store_report);
-  uint8_t send_config_();
+  uint8_t send_init_config_();
+  uint8_t send_core_config_();
 
   uint8_t set_discover_map_();
 
   uint8_t set_listen_mode_routing_();
 
   uint8_t start_discovery_();
-  uint8_t deactivate_(uint8_t type);
+  uint8_t deactivate_(uint8_t type, uint16_t timeout = NFCC_DEFAULT_TIMEOUT);
 
   void select_endpoint_();
 
@@ -368,6 +361,7 @@ class PN7160 : public Component,
     EP_WRITE,
   } next_task_{EP_READ};
 
+  bool config_update_pending_{false};
   bool listening_enabled_{true};
   bool polling_enabled_{true};
 
@@ -393,6 +387,7 @@ class PN7160 : public Component,
   CardEmulationState ce_state_{CardEmulationState::CARD_EMU_IDLE};
   NCIState nci_state_{NCIState::NFCC_RESET};
 
+  std::shared_ptr<nfc::NdefMessage> card_emulation_message_;
   nfc::NdefMessage *next_task_message_to_write_;
 
   std::vector<PN7160BinarySensor *> binary_sensors_;
