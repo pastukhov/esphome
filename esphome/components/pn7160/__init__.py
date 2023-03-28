@@ -11,6 +11,7 @@ DEPENDENCIES = ["spi"]
 CONF_DWL_REQ_PIN = "dwl_req_pin"
 CONF_IRQ_PIN = "irq_pin"
 CONF_ON_FINISHED_WRITE = "on_finished_write"
+CONF_ON_EMULATED_TAG_SCAN = "on_emulated_tag_scan"
 CONF_PN7160_ID = "pn7160_id"
 CONF_TAG_TTL = "tag_ttl"
 CONF_VEN_PIN = "ven_pin"
@@ -19,6 +20,10 @@ CONF_WKUP_REQ_PIN = "wkup_req_pin"
 pn7160_ns = cg.esphome_ns.namespace("pn7160")
 PN7160 = pn7160_ns.class_("PN7160", cg.PollingComponent, spi.SPIDevice)
 
+
+PN7160OnEmulatedTagScanTrigger = pn7160_ns.class_(
+    "PN7160OnEmulatedTagScanTrigger", automation.Trigger.template()
+)
 
 PN7160OnFinishedWriteTrigger = pn7160_ns.class_(
     "PN7160OnFinishedWriteTrigger", automation.Trigger.template()
@@ -35,9 +40,11 @@ CONFIG_SCHEMA = (
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(PN7160),
-            cv.Optional(CONF_ON_TAG): automation.validate_automation(
+            cv.Optional(CONF_ON_EMULATED_TAG_SCAN): automation.validate_automation(
                 {
-                    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(nfc.NfcOnTagTrigger),
+                    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
+                        PN7160OnEmulatedTagScanTrigger
+                    ),
                 }
             ),
             cv.Optional(CONF_ON_FINISHED_WRITE): automation.validate_automation(
@@ -45,6 +52,11 @@ CONFIG_SCHEMA = (
                     cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
                         PN7160OnFinishedWriteTrigger
                     ),
+                }
+            ),
+            cv.Optional(CONF_ON_TAG): automation.validate_automation(
+                {
+                    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(nfc.NfcOnTagTrigger),
                 }
             ),
             cv.Optional(CONF_ON_TAG_REMOVED): automation.validate_automation(
@@ -97,6 +109,10 @@ async def to_code(config):
         await automation.build_automation(
             trigger, [(cg.std_string, "x"), (nfc.NfcTag, "tag")], conf
         )
+
+    for conf in config.get(CONF_ON_EMULATED_TAG_SCAN, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(trigger, [], conf)
 
     for conf in config.get(CONF_ON_FINISHED_WRITE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)

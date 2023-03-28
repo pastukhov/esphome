@@ -883,7 +883,8 @@ void PN7160::card_emu_t4t_get_response(std::vector<uint8_t> &response, std::vect
         ndef_response.insert(ndef_response.end(), std::begin(CARD_EMU_T4T_OK), std::end(CARD_EMU_T4T_OK));
 
         if ((offset + length) >= (ndef_msg_size + 2)) {
-          ESP_LOGW(TAG, "NDEF message sent");
+          ESP_LOGD(TAG, "NDEF message sent");
+          this->on_emulated_tag_scan_callback_.call();
         }
       }
     }

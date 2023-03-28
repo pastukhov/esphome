@@ -271,6 +271,10 @@ class PN7160 : public Component,
   void register_ontag_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontag_.push_back(trig); }
   void register_ontagremoved_trigger(nfc::NfcOnTagTrigger *trig) { this->triggers_ontagremoved_.push_back(trig); }
 
+  void add_on_emulated_tag_scan_callback(std::function<void()> callback) {
+    this->on_emulated_tag_scan_callback_.add(std::move(callback));
+  }
+
   void add_on_finished_write_callback(std::function<void()> callback) {
     this->on_finished_write_callback_.add(std::move(callback));
   }
@@ -380,6 +384,7 @@ class PN7160 : public Component,
   GPIOPin *ven_pin_;
   GPIOPin *wkup_req_pin_;
 
+  CallbackManager<void()> on_emulated_tag_scan_callback_;
   CallbackManager<void()> on_finished_write_callback_;
 
   std::vector<DiscoveredEndpoint> discovered_endpoint_;
@@ -417,6 +422,12 @@ class PN7160BinarySensor : public binary_sensor::BinarySensor {
   std::vector<uint8_t> uid_;
 };
 
+class PN7160OnEmulatedTagScanTrigger : public Trigger<> {
+ public:
+  explicit PN7160OnEmulatedTagScanTrigger(PN7160 *parent) {
+    parent->add_on_emulated_tag_scan_callback([this]() { this->trigger(); });
+  }
+};
 class PN7160OnFinishedWriteTrigger : public Trigger<> {
  public:
   explicit PN7160OnFinishedWriteTrigger(PN7160 *parent) {
