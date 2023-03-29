@@ -262,7 +262,7 @@ class PN7160 : public Component,
   void set_wkup_req_pin(GPIOPin *wkup_req_pin) { this->wkup_req_pin_ = wkup_req_pin; }
 
   void set_tag_ttl(uint32_t ttl) { this->tag_ttl_ = ttl; }
-  void set_tag_to_emulate(std::shared_ptr<nfc::NdefMessage> message);
+  void set_tag_emulation_message(std::shared_ptr<nfc::NdefMessage> message);
   void set_tag_emulation_off();
   void set_tag_emulation_on();
   bool tag_emulation_enabled() { return this->listening_enabled_; }
@@ -284,7 +284,8 @@ class PN7160 : public Component,
   void read_mode();
   void clean_mode();
   void format_mode();
-  void write_mode(nfc::NdefMessage *message);
+  void write_mode();
+  void set_tag_write_message(std::shared_ptr<nfc::NdefMessage> message);
 
  protected:
   void init_failure_handler_();
@@ -306,7 +307,7 @@ class PN7160 : public Component,
   uint8_t read_endpoint_data_(nfc::NfcTag &tag);
   uint8_t clean_endpoint_(std::vector<uint8_t> &uid);
   uint8_t format_endpoint_(std::vector<uint8_t> &uid);
-  uint8_t write_endpoint_(std::vector<uint8_t> &uid, nfc::NdefMessage *message);
+  uint8_t write_endpoint_(std::vector<uint8_t> &uid, std::shared_ptr<nfc::NdefMessage> message);
 
   std::unique_ptr<nfc::NfcTag> build_tag_(const uint8_t mode_tech, const std::vector<uint8_t> &data);
   optional<size_t> find_tag_uid_(const std::vector<uint8_t> &uid);
@@ -346,7 +347,7 @@ class PN7160 : public Component,
   uint8_t sect_to_auth(const uint8_t block_num);
   uint8_t format_mifare_classic_mifare_();
   uint8_t format_mifare_classic_ndef_();
-  uint8_t write_mifare_classic_tag_(nfc::NdefMessage *message);
+  uint8_t write_mifare_classic_tag_(std::shared_ptr<nfc::NdefMessage> message);
   uint8_t halt_mifare_classic_tag_();
 
   uint8_t read_mifare_ultralight_tag_(nfc::NfcTag &tag);
@@ -355,7 +356,7 @@ class PN7160 : public Component,
   uint16_t read_mifare_ultralight_capacity_();
   uint8_t find_mifare_ultralight_ndef_(uint8_t &message_length, uint8_t &message_start_index);
   uint8_t write_mifare_ultralight_page_(const uint8_t page_num, std::vector<uint8_t> &write_data);
-  uint8_t write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMessage *message);
+  uint8_t write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, std::shared_ptr<nfc::NdefMessage> message);
   uint8_t clean_mifare_ultralight_();
 
   enum NfcTask : uint8_t {
@@ -366,7 +367,7 @@ class PN7160 : public Component,
   } next_task_{EP_READ};
 
   bool config_update_pending_{false};
-  bool listening_enabled_{true};
+  bool listening_enabled_{false};
   bool polling_enabled_{true};
 
   uint8_t fail_count_{0};
@@ -393,51 +394,11 @@ class PN7160 : public Component,
   NCIState nci_state_{NCIState::NFCC_RESET};
 
   std::shared_ptr<nfc::NdefMessage> card_emulation_message_;
-  nfc::NdefMessage *next_task_message_to_write_;
+  std::shared_ptr<nfc::NdefMessage> next_task_message_to_write_;
 
   std::vector<PN7160BinarySensor *> binary_sensors_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontagremoved_;
-};
-
-class PN7160BinarySensor : public binary_sensor::BinarySensor {
- public:
-  void set_uid(const std::vector<uint8_t> &uid) { uid_ = uid; }
-
-  bool tag_match(const std::vector<uint8_t> &data);
-
-  void tag_off(const std::vector<uint8_t> &data) {
-    if (this->tag_match(data)) {
-      this->publish_state(false);
-    }
-  }
-
-  void tag_on(const std::vector<uint8_t> &data) {
-    if (this->tag_match(data)) {
-      this->publish_state(true);
-    }
-  }
-
- protected:
-  std::vector<uint8_t> uid_;
-};
-
-class PN7160OnEmulatedTagScanTrigger : public Trigger<> {
- public:
-  explicit PN7160OnEmulatedTagScanTrigger(PN7160 *parent) {
-    parent->add_on_emulated_tag_scan_callback([this]() { this->trigger(); });
-  }
-};
-class PN7160OnFinishedWriteTrigger : public Trigger<> {
- public:
-  explicit PN7160OnFinishedWriteTrigger(PN7160 *parent) {
-    parent->add_on_finished_write_callback([this]() { this->trigger(); });
-  }
-};
-
-template<typename... Ts> class PN7160IsWritingCondition : public Condition<Ts...>, public Parented<PN7160> {
- public:
-  bool check(Ts... x) override { return this->parent_->is_writing(); }
 };
 
 }  // namespace pn7160

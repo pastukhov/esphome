@@ -1,4 +1,5 @@
 from esphome import automation, pins
+from esphome.automation import maybe_simple_id
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import spi, nfc
@@ -13,12 +14,21 @@ CONF_IRQ_PIN = "irq_pin"
 CONF_ON_FINISHED_WRITE = "on_finished_write"
 CONF_ON_EMULATED_TAG_SCAN = "on_emulated_tag_scan"
 CONF_PN7160_ID = "pn7160_id"
+CONF_SET_CLEAN_MODE = "set_clean_mode"
+CONF_SET_FORMAT_MODE = "set_format_mode"
+CONF_SET_READ_MODE = "set_read_mode"
+CONF_SET_WRITE_MODE = "set_write_mode"
 CONF_TAG_TTL = "tag_ttl"
 CONF_VEN_PIN = "ven_pin"
 CONF_WKUP_REQ_PIN = "wkup_req_pin"
 
 pn7160_ns = cg.esphome_ns.namespace("pn7160")
-PN7160 = pn7160_ns.class_("PN7160", cg.PollingComponent, spi.SPIDevice)
+PN7160 = pn7160_ns.class_("PN7160", cg.Component, spi.SPIDevice)
+
+SetCleanModeAction = pn7160_ns.class_("SetCleanModeAction", automation.Action)
+SetFormatModeAction = pn7160_ns.class_("SetFormatModeAction", automation.Action)
+SetReadModeAction = pn7160_ns.class_("SetReadModeAction", automation.Action)
+SetWriteModeAction = pn7160_ns.class_("SetWriteModeAction", automation.Action)
 
 
 PN7160OnEmulatedTagScanTrigger = pn7160_ns.class_(
@@ -35,6 +45,13 @@ PN7160IsWritingCondition = pn7160_ns.class_(
 
 
 IsWritingCondition = nfc.nfc_ns.class_("IsWritingCondition", automation.Condition)
+
+
+SET_MODE_ACTION_SCHEMA = maybe_simple_id(
+    {
+        cv.Required(CONF_ID): cv.use_id(PN7160),
+    }
+)
 
 CONFIG_SCHEMA = (
     cv.Schema(
@@ -74,6 +91,23 @@ CONFIG_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
     .extend(spi.spi_device_schema(cs_pin_required=True))
 )
+
+
+@automation.register_action(
+    "tag.set_clean_mode", SetCleanModeAction, SET_MODE_ACTION_SCHEMA
+)
+@automation.register_action(
+    "tag.set_format_mode", SetFormatModeAction, SET_MODE_ACTION_SCHEMA
+)
+@automation.register_action(
+    "tag.set_read_mode", SetReadModeAction, SET_MODE_ACTION_SCHEMA
+)
+@automation.register_action(
+    "tag.set_write_mode", SetWriteModeAction, SET_MODE_ACTION_SCHEMA
+)
+async def pn7160_simple_action_to_code(config, action_id, template_arg, args):
+    paren = await cg.get_variable(config[CONF_ID])
+    return cg.new_Pvariable(action_id, template_arg, paren)
 
 
 async def to_code(config):

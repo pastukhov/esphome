@@ -1,4 +1,6 @@
+#include "automation.h"
 #include "pn7160.h"
+
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
@@ -36,7 +38,7 @@ void PN7160::loop() {
   this->purge_old_tags_();
 }
 
-void PN7160::set_tag_to_emulate(std::shared_ptr<nfc::NdefMessage> message) {
+void PN7160::set_tag_emulation_message(std::shared_ptr<nfc::NdefMessage> message) {
   this->card_emulation_message_ = message;
   ESP_LOGD(TAG, "Tag emulation message set");
 }
@@ -87,10 +89,14 @@ void PN7160::format_mode() {
   ESP_LOGD(TAG, "Waiting to format next tag");
 }
 
-void PN7160::write_mode(nfc::NdefMessage *message) {
+void PN7160::write_mode() {
   this->next_task_ = EP_WRITE;
-  this->next_task_message_to_write_ = message;
   ESP_LOGD(TAG, "Waiting to write next tag");
+}
+
+void PN7160::set_tag_write_message(std::shared_ptr<nfc::NdefMessage> message) {
+  this->next_task_message_to_write_ = message;
+  ESP_LOGD(TAG, "Message to write has been set");
 }
 
 void PN7160::init_failure_handler_() {
@@ -368,7 +374,7 @@ uint8_t PN7160::format_endpoint_(std::vector<uint8_t> &uid) {
   return STATUS_FAILED;
 }
 
-uint8_t PN7160::write_endpoint_(std::vector<uint8_t> &uid, nfc::NdefMessage *message) {
+uint8_t PN7160::write_endpoint_(std::vector<uint8_t> &uid, std::shared_ptr<nfc::NdefMessage> message) {
   uint8_t type = nfc::guess_tag_type(uid.size());
   switch (type) {
     case nfc::TAG_TYPE_MIFARE_CLASSIC:
@@ -694,7 +700,6 @@ void PN7160::process_rf_intf_activated_oid_(std::vector<uint8_t> &response) {  /
               ESP_LOGE(TAG, "  Failed to write message to tag");
             }
             ESP_LOGD(TAG, "  Finished writing NDEF data");
-            delete this->next_task_message_to_write_;
             this->next_task_message_to_write_ = nullptr;
             this->on_finished_write_callback_.call();
           }

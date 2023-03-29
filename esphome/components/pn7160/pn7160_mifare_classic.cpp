@@ -253,7 +253,7 @@ uint8_t PN7160::write_mifare_classic_block_(uint8_t block_num, std::vector<uint8
   return STATUS_OK;
 }
 
-uint8_t PN7160::write_mifare_classic_tag_(nfc::NdefMessage *message) {
+uint8_t PN7160::write_mifare_classic_tag_(std::shared_ptr<nfc::NdefMessage> message) {
   auto encoded = message->encode();
 
   uint32_t message_length = encoded.size();

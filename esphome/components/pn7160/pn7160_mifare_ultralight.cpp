@@ -101,7 +101,7 @@ uint8_t PN7160::find_mifare_ultralight_ndef_(uint8_t &message_length, uint8_t &m
   return STATUS_FAILED;
 }
 
-uint8_t PN7160::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMessage *message) {
+uint8_t PN7160::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, std::shared_ptr<nfc::NdefMessage> message) {
   uint32_t capacity = this->read_mifare_ultralight_capacity_();
 
   auto encoded = message->encode();
