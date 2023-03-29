@@ -90,6 +90,11 @@ void PN7160::format_mode() {
 }
 
 void PN7160::write_mode() {
+  if (this->next_task_message_to_write_ == nullptr) {
+    ESP_LOGW(TAG, "Message to write must be set before setting write mode");
+    return;
+  }
+
   this->next_task_ = EP_WRITE;
   ESP_LOGD(TAG, "Waiting to write next tag");
 }
