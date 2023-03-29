@@ -43,6 +43,29 @@ void PN7160::set_tag_emulation_message(std::shared_ptr<nfc::NdefMessage> message
   ESP_LOGD(TAG, "Tag emulation message set");
 }
 
+void PN7160::set_tag_emulation_message(optional<std::string> message, optional<bool> include_android_app_record) {
+  if (!message.has_value()) {
+    return;
+  }
+
+  nfc::NdefMessage ndef_message;
+
+  ndef_message.add_uri_record(message.value());
+
+  if (!include_android_app_record.has_value() || include_android_app_record.value()) {
+    std::string ext_record_type = "android.com:pkg";
+    std::string ext_record_payload = "io.homeassistant.companion.android";
+    nfc::NdefRecord ext_record;
+    ext_record.set_tnf(nfc::TNF_EXTERNAL_TYPE);
+    ext_record.set_type(ext_record_type);
+    ext_record.set_payload(ext_record_payload);
+    ndef_message.add_record(make_unique<nfc::NdefRecord>(ext_record));
+  }
+
+  this->card_emulation_message_ = make_unique<nfc::NdefMessage>(ndef_message);
+  ESP_LOGD(TAG, "Tag emulation message set");
+}
+
 void PN7160::set_tag_emulation_off() {
   this->listening_enabled_ = false;
   this->config_update_pending_ = true;
@@ -101,6 +124,29 @@ void PN7160::write_mode() {
 
 void PN7160::set_tag_write_message(std::shared_ptr<nfc::NdefMessage> message) {
   this->next_task_message_to_write_ = message;
+  ESP_LOGD(TAG, "Message to write has been set");
+}
+
+void PN7160::set_tag_write_message(optional<std::string> message, optional<bool> include_android_app_record) {
+  if (!message.has_value()) {
+    return;
+  }
+
+  nfc::NdefMessage ndef_message;
+
+  ndef_message.add_uri_record(message.value());
+
+  if (!include_android_app_record.has_value() || include_android_app_record.value()) {
+    std::string ext_record_type = "android.com:pkg";
+    std::string ext_record_payload = "io.homeassistant.companion.android";
+    nfc::NdefRecord ext_record;
+    ext_record.set_tnf(nfc::TNF_EXTERNAL_TYPE);
+    ext_record.set_type(ext_record_type);
+    ext_record.set_payload(ext_record_payload);
+    ndef_message.add_record(make_unique<nfc::NdefRecord>(ext_record));
+  }
+
+  this->next_task_message_to_write_ = make_unique<nfc::NdefMessage>(ndef_message);
   ESP_LOGD(TAG, "Message to write has been set");
 }
 

@@ -263,6 +263,7 @@ class PN7160 : public Component,
 
   void set_tag_ttl(uint32_t ttl) { this->tag_ttl_ = ttl; }
   void set_tag_emulation_message(std::shared_ptr<nfc::NdefMessage> message);
+  void set_tag_emulation_message(optional<std::string> message, optional<bool> include_android_app_record);
   void set_tag_emulation_off();
   void set_tag_emulation_on();
   bool tag_emulation_enabled() { return this->listening_enabled_; }
@@ -286,6 +287,7 @@ class PN7160 : public Component,
   void format_mode();
   void write_mode();
   void set_tag_write_message(std::shared_ptr<nfc::NdefMessage> message);
+  void set_tag_write_message(optional<std::string> message, optional<bool> include_android_app_record);
 
  protected:
   void init_failure_handler_();

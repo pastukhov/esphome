@@ -10,13 +10,19 @@ CODEOWNERS = ["@kbx81", "@jesserockz"]
 DEPENDENCIES = ["spi"]
 
 CONF_DWL_REQ_PIN = "dwl_req_pin"
+CONF_EMULATION_OFF = "emulation_off"
+CONF_EMULATION_ON = "emulation_on"
+CONF_INCLUDE_ANDROID_APP_RECORD = "include_android_app_record"
 CONF_IRQ_PIN = "irq_pin"
+CONF_MESSAGE = "message"
 CONF_ON_FINISHED_WRITE = "on_finished_write"
 CONF_ON_EMULATED_TAG_SCAN = "on_emulated_tag_scan"
 CONF_PN7160_ID = "pn7160_id"
 CONF_SET_CLEAN_MODE = "set_clean_mode"
+CONF_SET_EMULATION_MESSAGE = "set_emulation_message"
 CONF_SET_FORMAT_MODE = "set_format_mode"
 CONF_SET_READ_MODE = "set_read_mode"
+CONF_SET_WRITE_MESSAGE = "set_write_message"
 CONF_SET_WRITE_MODE = "set_write_mode"
 CONF_TAG_TTL = "tag_ttl"
 CONF_VEN_PIN = "ven_pin"
@@ -25,9 +31,15 @@ CONF_WKUP_REQ_PIN = "wkup_req_pin"
 pn7160_ns = cg.esphome_ns.namespace("pn7160")
 PN7160 = pn7160_ns.class_("PN7160", cg.Component, spi.SPIDevice)
 
+EmulationOffAction = pn7160_ns.class_("EmulationOffAction", automation.Action)
+EmulationOnAction = pn7160_ns.class_("EmulationOnAction", automation.Action)
 SetCleanModeAction = pn7160_ns.class_("SetCleanModeAction", automation.Action)
+SetEmulationMessageAction = pn7160_ns.class_(
+    "SetEmulationMessageAction", automation.Action
+)
 SetFormatModeAction = pn7160_ns.class_("SetFormatModeAction", automation.Action)
 SetReadModeAction = pn7160_ns.class_("SetReadModeAction", automation.Action)
+SetWriteMessageAction = pn7160_ns.class_("SetWriteMessageAction", automation.Action)
 SetWriteModeAction = pn7160_ns.class_("SetWriteModeAction", automation.Action)
 
 
@@ -47,9 +59,17 @@ PN7160IsWritingCondition = pn7160_ns.class_(
 IsWritingCondition = nfc.nfc_ns.class_("IsWritingCondition", automation.Condition)
 
 
-SET_MODE_ACTION_SCHEMA = maybe_simple_id(
+SIMPLE_ACTION_SCHEMA = maybe_simple_id(
     {
         cv.Required(CONF_ID): cv.use_id(PN7160),
+    }
+)
+
+SET_MESSAGE_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(PN7160),
+        cv.Required(CONF_MESSAGE): cv.templatable(cv.string),
+        cv.Optional(CONF_INCLUDE_ANDROID_APP_RECORD, default=True): cv.boolean,
     }
 )
 
@@ -94,16 +114,54 @@ CONFIG_SCHEMA = (
 
 
 @automation.register_action(
-    "tag.set_clean_mode", SetCleanModeAction, SET_MODE_ACTION_SCHEMA
+    "tag.set_emulation_message",
+    SetEmulationMessageAction,
+    SET_MESSAGE_ACTION_SCHEMA,
+)
+async def pn7160_set_emulation_message_to_code(config, action_id, template_arg, args):
+    paren = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, paren)
+    template_ = await cg.templatable(config[CONF_MESSAGE], args, cg.std_string)
+    cg.add(var.set_message(template_))
+    template_ = await cg.templatable(
+        config[CONF_INCLUDE_ANDROID_APP_RECORD], args, cg.bool_
+    )
+    cg.add(var.set_include_android_app_record(template_))
+    return var
+
+
+@automation.register_action(
+    "tag.set_write_message",
+    SetWriteMessageAction,
+    SET_MESSAGE_ACTION_SCHEMA,
+)
+async def pn7160_set_write_message_to_code(config, action_id, template_arg, args):
+    paren = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, paren)
+    template_ = await cg.templatable(config[CONF_MESSAGE], args, cg.std_string)
+    cg.add(var.set_message(template_))
+    template_ = await cg.templatable(
+        config[CONF_INCLUDE_ANDROID_APP_RECORD], args, cg.bool_
+    )
+    cg.add(var.set_include_android_app_record(template_))
+    return var
+
+
+@automation.register_action(
+    "tag.emulation_off", EmulationOffAction, SIMPLE_ACTION_SCHEMA
+)
+@automation.register_action("tag.emulation_on", EmulationOnAction, SIMPLE_ACTION_SCHEMA)
+@automation.register_action(
+    "tag.set_clean_mode", SetCleanModeAction, SIMPLE_ACTION_SCHEMA
 )
 @automation.register_action(
-    "tag.set_format_mode", SetFormatModeAction, SET_MODE_ACTION_SCHEMA
+    "tag.set_format_mode", SetFormatModeAction, SIMPLE_ACTION_SCHEMA
 )
 @automation.register_action(
-    "tag.set_read_mode", SetReadModeAction, SET_MODE_ACTION_SCHEMA
+    "tag.set_read_mode", SetReadModeAction, SIMPLE_ACTION_SCHEMA
 )
 @automation.register_action(
-    "tag.set_write_mode", SetWriteModeAction, SET_MODE_ACTION_SCHEMA
+    "tag.set_write_mode", SetWriteModeAction, SIMPLE_ACTION_SCHEMA
 )
 async def pn7160_simple_action_to_code(config, action_id, template_arg, args):
     paren = await cg.get_variable(config[CONF_ID])

@@ -49,6 +49,26 @@ template<typename... Ts> class PN7160IsWritingCondition : public Condition<Ts...
   bool check(Ts... x) override { return this->parent_->is_writing(); }
 };
 
+template<typename... Ts> class EmulationOffAction : public Action<Ts...> {
+ public:
+  explicit EmulationOffAction(PN7160 *a_pn7160) : pn7160_(a_pn7160) {}
+
+  void play(Ts... x) override { this->pn7160_->set_tag_emulation_off(); }
+
+ protected:
+  PN7160 *pn7160_;
+};
+
+template<typename... Ts> class EmulationOnAction : public Action<Ts...> {
+ public:
+  explicit EmulationOnAction(PN7160 *a_pn7160) : pn7160_(a_pn7160) {}
+
+  void play(Ts... x) override { this->pn7160_->set_tag_emulation_on(); }
+
+ protected:
+  PN7160 *pn7160_;
+};
+
 template<typename... Ts> class SetCleanModeAction : public Action<Ts...> {
  public:
   explicit SetCleanModeAction(PN7160 *a_pn7160) : pn7160_(a_pn7160) {}
@@ -74,6 +94,38 @@ template<typename... Ts> class SetReadModeAction : public Action<Ts...> {
   explicit SetReadModeAction(PN7160 *a_pn7160) : pn7160_(a_pn7160) {}
 
   void play(Ts... x) override { this->pn7160_->read_mode(); }
+
+ protected:
+  PN7160 *pn7160_;
+};
+
+template<typename... Ts> class SetEmulationMessageAction : public Action<Ts...> {
+ public:
+  explicit SetEmulationMessageAction(PN7160 *a_pn7160) : pn7160_(a_pn7160) {}
+
+  TEMPLATABLE_VALUE(std::string, message)
+  TEMPLATABLE_VALUE(bool, include_android_app_record)
+
+  void play(Ts... x) override {
+    this->pn7160_->set_tag_emulation_message(this->message_.optional_value(x...),
+                                             this->include_android_app_record_.optional_value(x...));
+  }
+
+ protected:
+  PN7160 *pn7160_;
+};
+
+template<typename... Ts> class SetWriteMessageAction : public Action<Ts...> {
+ public:
+  explicit SetWriteMessageAction(PN7160 *a_pn7160) : pn7160_(a_pn7160) {}
+
+  TEMPLATABLE_VALUE(std::string, message)
+  TEMPLATABLE_VALUE(bool, include_android_app_record)
+
+  void play(Ts... x) override {
+    this->pn7160_->set_tag_write_message(this->message_.optional_value(x...),
+                                         this->include_android_app_record_.optional_value(x...));
+  }
 
  protected:
   PN7160 *pn7160_;
