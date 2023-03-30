@@ -48,21 +48,21 @@ void PN7160::set_tag_emulation_message(optional<std::string> message, optional<b
     return;
   }
 
-  nfc::NdefMessage ndef_message;
+  auto ndef_message = make_unique<nfc::NdefMessage>();
 
-  ndef_message.add_uri_record(message.value());
+  ndef_message->add_uri_record(message.value());
 
   if (!include_android_app_record.has_value() || include_android_app_record.value()) {
     std::string ext_record_type = "android.com:pkg";
     std::string ext_record_payload = "io.homeassistant.companion.android";
-    nfc::NdefRecord ext_record;
-    ext_record.set_tnf(nfc::TNF_EXTERNAL_TYPE);
-    ext_record.set_type(ext_record_type);
-    ext_record.set_payload(ext_record_payload);
-    ndef_message.add_record(make_unique<nfc::NdefRecord>(ext_record));
+    auto ext_record = make_unique<nfc::NdefRecord>();
+    ext_record->set_tnf(nfc::TNF_EXTERNAL_TYPE);
+    ext_record->set_type(ext_record_type);
+    ext_record->set_payload(ext_record_payload);
+    ndef_message->add_record(std::move(ext_record));
   }
 
-  this->card_emulation_message_ = make_unique<nfc::NdefMessage>(ndef_message);
+  this->card_emulation_message_ = std::move(ndef_message);
   ESP_LOGD(TAG, "Tag emulation message set");
 }
 
@@ -132,21 +132,21 @@ void PN7160::set_tag_write_message(optional<std::string> message, optional<bool>
     return;
   }
 
-  nfc::NdefMessage ndef_message;
+  auto ndef_message = make_unique<nfc::NdefMessage>();
 
-  ndef_message.add_uri_record(message.value());
+  ndef_message->add_uri_record(message.value());
 
   if (!include_android_app_record.has_value() || include_android_app_record.value()) {
     std::string ext_record_type = "android.com:pkg";
     std::string ext_record_payload = "io.homeassistant.companion.android";
-    nfc::NdefRecord ext_record;
-    ext_record.set_tnf(nfc::TNF_EXTERNAL_TYPE);
-    ext_record.set_type(ext_record_type);
-    ext_record.set_payload(ext_record_payload);
-    ndef_message.add_record(make_unique<nfc::NdefRecord>(ext_record));
+    auto ext_record = make_unique<nfc::NdefRecord>();
+    ext_record->set_tnf(nfc::TNF_EXTERNAL_TYPE);
+    ext_record->set_type(ext_record_type);
+    ext_record->set_payload(ext_record_payload);
+    ndef_message->add_record(std::move(ext_record));
   }
 
-  this->next_task_message_to_write_ = make_unique<nfc::NdefMessage>(ndef_message);
+  this->next_task_message_to_write_ = std::move(ndef_message);
   ESP_LOGD(TAG, "Message to write has been set");
 }
 
@@ -484,10 +484,9 @@ void PN7160::purge_old_tags_() {
         trigger->process(make_unique<nfc::NfcTag>(this->discovered_endpoint_[i].tag));
       }
       for (auto *bs : this->binary_sensors_) {
-        bs->tag_off(this->discovered_endpoint_[i].tag.get_uid());
+        bs->tag_off(this->discovered_endpoint_[i].tag);
       }
-      ESP_LOGW(TAG, "Tag %s removed from cache",
-               nfc::format_bytes(this->discovered_endpoint_[i].tag.get_uid()).c_str());
+      ESP_LOGD(TAG, "Tag %s removed", nfc::format_bytes(this->discovered_endpoint_[i].tag.get_uid()).c_str());
       this->discovered_endpoint_.erase(this->discovered_endpoint_.begin() + i);
     }
   }
@@ -778,7 +777,7 @@ void PN7160::process_rf_intf_activated_oid_(std::vector<uint8_t> &response) {  /
             trigger->process(make_unique<nfc::NfcTag>(working_endpoint.tag));
           }
           for (auto *bs : this->binary_sensors_) {
-            bs->tag_on(working_endpoint.tag.get_uid());
+            bs->tag_on(working_endpoint.tag);
           }
           working_endpoint.trig_called = true;
           break;
@@ -1103,7 +1102,18 @@ uint8_t PN7160::wait_for_irq_(uint16_t timeout, bool state, bool warn) {
   }
 }
 
-bool PN7160BinarySensor::tag_match(const std::vector<uint8_t> &data) {
+bool PN7160BinarySensor::tag_match_ndef_string(const std::shared_ptr<esphome::nfc::NdefMessage> &msg) {
+  auto records = msg->get_records();
+
+  for (auto record : records) {
+    if (record->get_payload().find(this->match_string_) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PN7160BinarySensor::tag_match_uid(const std::vector<uint8_t> &data) {
   if (data.size() != this->uid_.size()) {
     return false;
   }
@@ -1115,6 +1125,24 @@ bool PN7160BinarySensor::tag_match(const std::vector<uint8_t> &data) {
   }
 
   return true;
+}
+
+void PN7160BinarySensor::tag_off(nfc::NfcTag &tag) {
+  if (!this->match_string_.empty() && tag.has_ndef_message() && this->tag_match_ndef_string(tag.get_ndef_message())) {
+    this->publish_state(false);
+  }
+  if (!this->uid_.empty() && this->tag_match_uid(tag.get_uid())) {
+    this->publish_state(false);
+  }
+}
+
+void PN7160BinarySensor::tag_on(nfc::NfcTag &tag) {
+  if (!this->match_string_.empty() && tag.has_ndef_message() && this->tag_match_ndef_string(tag.get_ndef_message())) {
+    this->publish_state(true);
+  }
+  if (!this->uid_.empty() && this->tag_match_uid(tag.get_uid())) {
+    this->publish_state(true);
+  }
 }
 
 }  // namespace pn7160

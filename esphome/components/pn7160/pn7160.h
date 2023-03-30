@@ -245,7 +245,21 @@ struct DiscoveredEndpoint {
   bool trig_called;
 };
 
-class PN7160BinarySensor;
+class PN7160BinarySensor : public binary_sensor::BinarySensor {
+ public:
+  void set_match_string(const std::string &str) { match_string_ = str; }
+  void set_uid(const std::vector<uint8_t> &uid) { uid_ = uid; }
+
+  bool tag_match_ndef_string(const std::shared_ptr<esphome::nfc::NdefMessage> &msg);
+  bool tag_match_uid(const std::vector<uint8_t> &data);
+
+  void tag_off(nfc::NfcTag &tag);
+  void tag_on(nfc::NfcTag &tag);
+
+ protected:
+  std::vector<uint8_t> uid_;
+  std::string match_string_;
+};
 
 class PN7160 : public Component,
                public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW, spi::CLOCK_PHASE_LEADING,

@@ -7,6 +7,8 @@ from . import pn7160_ns, PN7160, CONF_PN7160_ID
 
 DEPENDENCIES = ["pn7160"]
 
+CONF_NDEF_CONTAINS = "ndef_contains"
+
 
 def validate_uid(value):
     value = cv.string_strict(value)
@@ -31,11 +33,15 @@ def validate_uid(value):
 
 PN532BinarySensor = pn7160_ns.class_("PN7160BinarySensor", binary_sensor.BinarySensor)
 
-CONFIG_SCHEMA = binary_sensor.binary_sensor_schema(PN532BinarySensor).extend(
-    {
-        cv.GenerateID(CONF_PN7160_ID): cv.use_id(PN7160),
-        cv.Required(CONF_UID): validate_uid,
-    }
+CONFIG_SCHEMA = cv.All(
+    binary_sensor.binary_sensor_schema(PN532BinarySensor).extend(
+        {
+            cv.GenerateID(CONF_PN7160_ID): cv.use_id(PN7160),
+            cv.Optional(CONF_NDEF_CONTAINS): cv.string,
+            cv.Optional(CONF_UID): validate_uid,
+        }
+    ),
+    cv.has_exactly_one_key(CONF_NDEF_CONTAINS, CONF_UID),
 )
 
 
@@ -44,5 +50,8 @@ async def to_code(config):
 
     hub = await cg.get_variable(config[CONF_PN7160_ID])
     cg.add(hub.register_tag(var))
-    addr = [HexInt(int(x, 16)) for x in config[CONF_UID].split("-")]
-    cg.add(var.set_uid(addr))
+    if CONF_NDEF_CONTAINS in config:
+        cg.add(var.set_match_string(config[CONF_NDEF_CONTAINS]))
+    elif CONF_UID in config:
+        addr = [HexInt(int(x, 16)) for x in config[CONF_UID].split("-")]
+        cg.add(var.set_uid(addr))

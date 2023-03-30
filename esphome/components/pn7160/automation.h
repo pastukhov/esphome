@@ -2,33 +2,10 @@
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
-#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/pn7160/pn7160.h"
 
 namespace esphome {
 namespace pn7160 {
-
-class PN7160BinarySensor : public binary_sensor::BinarySensor {
- public:
-  void set_uid(const std::vector<uint8_t> &uid) { uid_ = uid; }
-
-  bool tag_match(const std::vector<uint8_t> &data);
-
-  void tag_off(const std::vector<uint8_t> &data) {
-    if (this->tag_match(data)) {
-      this->publish_state(false);
-    }
-  }
-
-  void tag_on(const std::vector<uint8_t> &data) {
-    if (this->tag_match(data)) {
-      this->publish_state(true);
-    }
-  }
-
- protected:
-  std::vector<uint8_t> uid_;
-};
 
 class PN7160OnEmulatedTagScanTrigger : public Trigger<> {
  public:
