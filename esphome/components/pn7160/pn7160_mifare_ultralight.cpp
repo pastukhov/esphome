@@ -11,63 +11,64 @@ static const char *const TAG = "pn7160.mifare_ultralight";
 uint8_t PN7160::read_mifare_ultralight_tag_(nfc::NfcTag &tag) {
   if (!this->is_mifare_ultralight_formatted_()) {
     ESP_LOGW(TAG, "Not NDEF formatted");
-    return STATUS_FAILED;
+    return nfc::STATUS_FAILED;
   }
 
   uint8_t message_length;
   uint8_t message_start_index;
-  if (this->find_mifare_ultralight_ndef_(message_length, message_start_index) != STATUS_OK) {
+  if (this->find_mifare_ultralight_ndef_(message_length, message_start_index) != nfc::STATUS_OK) {
     ESP_LOGW(TAG, "Couldn't find NDEF message");
-    return STATUS_FAILED;
+    return nfc::STATUS_FAILED;
   }
-  ESP_LOGVV(TAG, "NDEF message length: %d, start: %d", message_length, message_start_index);
+  ESP_LOGVV(TAG, "NDEF message length: %u, start: %u", message_length, message_start_index);
 
   if (message_length == 0) {
-    return STATUS_FAILED;
+    return nfc::STATUS_FAILED;
   }
 
   std::vector<uint8_t> data;
   if (read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE, message_length + message_start_index,
-                                    data) != STATUS_OK) {
+                                    data) != nfc::STATUS_OK) {
     ESP_LOGE(TAG, "Error reading tag data");
-    return STATUS_FAILED;
+    return nfc::STATUS_FAILED;
   }
 
   data.erase(data.begin(), data.begin() + message_start_index);
 
   tag.set_ndef_message(make_unique<nfc::NdefMessage>(data));
 
-  return STATUS_OK;
+  return nfc::STATUS_OK;
 }
 
 uint8_t PN7160::read_mifare_ultralight_bytes_(uint8_t start_page, uint16_t num_bytes, std::vector<uint8_t> &data) {
   const uint8_t read_increment = nfc::MIFARE_ULTRALIGHT_READ_SIZE * nfc::MIFARE_ULTRALIGHT_PAGE_SIZE;
-  std::vector<uint8_t> data_out = {nfc::MIFARE_CMD_READ, start_page};
-  std::vector<uint8_t> pages_in;
+  nfc::NciMessage rx;
+  nfc::NciMessage tx(nfc::NCI_PKT_MT_DATA, {nfc::MIFARE_CMD_READ, start_page});
 
   for (size_t i = 0; i * read_increment < num_bytes; i++) {
-    data_out[1] = i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page;
-    if (this->write_data_and_read_(data_out, pages_in, NFCC_DEFAULT_TIMEOUT, false) != STATUS_OK) {
+    tx.get_message().back() = i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page;
+    if (this->transceive_(tx, rx) != nfc::STATUS_OK) {
       ESP_LOGE(TAG, "Error reading tag data");
-      return STATUS_FAILED;
+      return nfc::STATUS_FAILED;
     }
     // if the subtraction rolls over the integer type, we'll append the full block of data we read;
     //  otherwise, only append the necessary portion of the data we read
     uint16_t bytes_offset = (i + 1) * read_increment;
-    auto pages_in_end_itr =
-        num_bytes - bytes_offset <= num_bytes ? pages_in.end() - 1 : pages_in.end() - bytes_offset - num_bytes + 1;
-    data.insert(data.end(), pages_in.begin() + 3, pages_in_end_itr);
+    auto pages_in_end_itr = num_bytes - bytes_offset <= num_bytes
+                                ? rx.get_message().end() - 1
+                                : rx.get_message().end() - bytes_offset - num_bytes + 1;
+    data.insert(data.end(), rx.get_message().begin() + nfc::NCI_PKT_HEADER_SIZE, pages_in_end_itr);
   }
 
   ESP_LOGVV(TAG, "Data read: %s", nfc::format_bytes(data).c_str());
 
-  return STATUS_OK;
+  return nfc::STATUS_OK;
 }
 
 bool PN7160::is_mifare_ultralight_formatted_() {
   std::vector<uint8_t> data;
   if (this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE, nfc::MIFARE_ULTRALIGHT_PAGE_SIZE,
-                                          data) == STATUS_OK) {
+                                          data) == nfc::STATUS_OK) {
     return !(data[0] == 0xFF && data[1] == 0xFF && data[2] == 0xFF && data[3] == 0xFF);
   }
   return true;
@@ -75,8 +76,8 @@ bool PN7160::is_mifare_ultralight_formatted_() {
 
 uint16_t PN7160::read_mifare_ultralight_capacity_() {
   std::vector<uint8_t> data;
-  if (this->read_mifare_ultralight_bytes_(3, nfc::MIFARE_ULTRALIGHT_PAGE_SIZE, data) == STATUS_OK) {
-    ESP_LOGVV(TAG, "Tag capacity is %u bytes", data[2] * 8U);
+  if (this->read_mifare_ultralight_bytes_(3, nfc::MIFARE_ULTRALIGHT_PAGE_SIZE, data) == nfc::STATUS_OK) {
+    ESP_LOGV(TAG, "Tag capacity is %u bytes", data[2] * 8U);
     return data[2] * 8U;
   }
   return 0;
@@ -85,20 +86,20 @@ uint16_t PN7160::read_mifare_ultralight_capacity_() {
 uint8_t PN7160::find_mifare_ultralight_ndef_(uint8_t &message_length, uint8_t &message_start_index) {
   std::vector<uint8_t> data;
   if (this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE, nfc::MIFARE_ULTRALIGHT_PAGE_SIZE * 2,
-                                          data) != STATUS_OK) {
-    return STATUS_FAILED;
+                                          data) != nfc::STATUS_OK) {
+    return nfc::STATUS_FAILED;
   }
 
   if (data[0] == 0x03) {
     message_length = data[1];
     message_start_index = 2;
-    return STATUS_OK;
+    return nfc::STATUS_OK;
   } else if (data[5] == 0x03) {
     message_length = data[6];
     message_start_index = 7;
-    return STATUS_OK;
+    return nfc::STATUS_OK;
   }
-  return STATUS_FAILED;
+  return nfc::STATUS_FAILED;
 }
 
 uint8_t PN7160::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, std::shared_ptr<nfc::NdefMessage> message) {
@@ -111,7 +112,7 @@ uint8_t PN7160::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, std::sha
 
   if (buffer_length > capacity) {
     ESP_LOGE(TAG, "Message length exceeds tag capacity %u > %u", buffer_length, capacity);
-    return STATUS_FAILED;
+    return nfc::STATUS_FAILED;
   }
 
   encoded.insert(encoded.begin(), 0x03);
@@ -131,13 +132,13 @@ uint8_t PN7160::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, std::sha
 
   while (index < buffer_length) {
     std::vector<uint8_t> data(encoded.begin() + index, encoded.begin() + index + nfc::MIFARE_ULTRALIGHT_PAGE_SIZE);
-    if (this->write_mifare_ultralight_page_(current_page, data) != STATUS_OK) {
-      return STATUS_FAILED;
+    if (this->write_mifare_ultralight_page_(current_page, data) != nfc::STATUS_OK) {
+      return nfc::STATUS_FAILED;
     }
     index += nfc::MIFARE_ULTRALIGHT_PAGE_SIZE;
     current_page++;
   }
-  return STATUS_OK;
+  return nfc::STATUS_OK;
 }
 
 uint8_t PN7160::clean_mifare_ultralight_() {
@@ -147,22 +148,25 @@ uint8_t PN7160::clean_mifare_ultralight_() {
   std::vector<uint8_t> blank_data = {0x00, 0x00, 0x00, 0x00};
 
   for (int i = nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE; i < pages; i++) {
-    if (this->write_mifare_ultralight_page_(i, blank_data) != STATUS_OK) {
-      return STATUS_FAILED;
+    if (this->write_mifare_ultralight_page_(i, blank_data) != nfc::STATUS_OK) {
+      return nfc::STATUS_FAILED;
     }
   }
-  return STATUS_OK;
+  return nfc::STATUS_OK;
 }
 
 uint8_t PN7160::write_mifare_ultralight_page_(uint8_t page_num, std::vector<uint8_t> &write_data) {
-  std::vector<uint8_t> data_out = {nfc::MIFARE_CMD_WRITE_ULTRALIGHT, page_num};
-  std::vector<uint8_t> response;
-  data_out.insert(data_out.end(), write_data.begin(), write_data.end());
-  if (this->write_data_and_read_(data_out, response, NFCC_DEFAULT_TIMEOUT, false) != STATUS_OK) {
+  std::vector<uint8_t> payload = {nfc::MIFARE_CMD_WRITE_ULTRALIGHT, page_num};
+  payload.insert(payload.end(), write_data.begin(), write_data.end());
+
+  nfc::NciMessage rx;
+  nfc::NciMessage tx(nfc::NCI_PKT_MT_DATA, payload);
+
+  if (this->transceive_(tx, rx, NFCC_TAG_WRITE_TIMEOUT) != nfc::STATUS_OK) {
     ESP_LOGE(TAG, "Error writing page %u", page_num);
-    return STATUS_FAILED;
+    return nfc::STATUS_FAILED;
   }
-  return STATUS_OK;
+  return nfc::STATUS_OK;
 }
 
 }  // namespace pn7160
