@@ -43,7 +43,8 @@ void PN7160::set_tag_emulation_message(std::shared_ptr<nfc::NdefMessage> message
   ESP_LOGD(TAG, "Tag emulation message set");
 }
 
-void PN7160::set_tag_emulation_message(optional<std::string> message, optional<bool> include_android_app_record) {
+void PN7160::set_tag_emulation_message(const optional<std::string> message,
+                                       const optional<bool> include_android_app_record) {
   if (!message.has_value()) {
     return;
   }
@@ -62,6 +63,10 @@ void PN7160::set_tag_emulation_message(optional<std::string> message, optional<b
 
   this->card_emulation_message_ = std::move(ndef_message);
   ESP_LOGD(TAG, "Tag emulation message set");
+}
+
+void PN7160::set_tag_emulation_message(const char *message, const bool include_android_app_record) {
+  this->set_tag_emulation_message(std::string(message), include_android_app_record);
 }
 
 void PN7160::set_tag_emulation_off() {

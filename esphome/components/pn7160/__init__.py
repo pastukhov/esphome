@@ -10,6 +10,7 @@ CODEOWNERS = ["@kbx81", "@jesserockz"]
 DEPENDENCIES = ["spi"]
 
 CONF_DWL_REQ_PIN = "dwl_req_pin"
+CONF_EMULATION_MESSAGE = "emulation_message"
 CONF_EMULATION_OFF = "emulation_off"
 CONF_EMULATION_ON = "emulation_on"
 CONF_INCLUDE_ANDROID_APP_RECORD = "include_android_app_record"
@@ -101,11 +102,12 @@ CONFIG_SCHEMA = (
                     cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(nfc.NfcOnTagTrigger),
                 }
             ),
-            cv.Optional(CONF_TAG_TTL): cv.positive_time_period_milliseconds,
             cv.Required(CONF_DWL_REQ_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_IRQ_PIN): pins.gpio_input_pin_schema,
             cv.Required(CONF_VEN_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_WKUP_REQ_PIN): pins.gpio_output_pin_schema,
+            cv.Optional(CONF_EMULATION_MESSAGE): cv.string,
+            cv.Optional(CONF_TAG_TTL): cv.positive_time_period_milliseconds,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -184,6 +186,10 @@ async def to_code(config):
 
     pin = await cg.gpio_pin_expression(config[CONF_WKUP_REQ_PIN])
     cg.add(var.set_wkup_req_pin(pin))
+
+    if CONF_EMULATION_MESSAGE in config:
+        cg.add(var.set_tag_emulation_message(config[CONF_EMULATION_MESSAGE]))
+        cg.add(var.set_tag_emulation_on())
 
     if CONF_TAG_TTL in config:
         cg.add(var.set_tag_ttl(config[CONF_TAG_TTL]))
