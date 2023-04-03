@@ -35,12 +35,14 @@ uint8_t PN7160::read_mifare_classic_tag_(nfc::NfcTag &tag) {
   while (index < buffer_size) {
     if (nfc::mifare_classic_is_first_block(current_block)) {
       if (this->auth_mifare_classic_block_(current_block, nfc::MIFARE_CMD_AUTH_A, nfc::NDEF_KEY) != nfc::STATUS_OK) {
-        ESP_LOGE(TAG, "Error, Block authentication failed for %u", current_block);
+        ESP_LOGE(TAG, "Block authentication failed for %u", current_block);
+        return nfc::STATUS_FAILED;
       }
     }
     std::vector<uint8_t> block_data;
     if (this->read_mifare_classic_block_(current_block, block_data) != nfc::STATUS_OK) {
       ESP_LOGE(TAG, "Error reading block %u", current_block);
+      return nfc::STATUS_FAILED;
     } else {
       buffer.insert(buffer.end(), block_data.begin(), block_data.end());
     }

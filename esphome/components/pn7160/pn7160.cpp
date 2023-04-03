@@ -563,6 +563,7 @@ void PN7160::nci_fsm_transition_() {
     case NCIState::NFCC_SET_DISCOVER_MAP:
       if (this->set_discover_map_() != nfc::STATUS_OK) {
         ESP_LOGE(TAG, "Failed to set discover map");
+        this->nci_fsm_set_error_state_(NCIState::NFCC_SET_LISTEN_MODE_ROUTING);
       } else {
         this->nci_fsm_set_state_(NCIState::NFCC_SET_LISTEN_MODE_ROUTING);
       }
@@ -571,12 +572,17 @@ void PN7160::nci_fsm_transition_() {
     case NCIState::NFCC_SET_LISTEN_MODE_ROUTING:
       if (this->set_listen_mode_routing_() != nfc::STATUS_OK) {
         ESP_LOGE(TAG, "Failed to set listen mode routing");
+        this->nci_fsm_set_error_state_(NCIState::RFST_IDLE);
       } else {
         this->nci_fsm_set_state_(NCIState::RFST_IDLE);
       }
       // fall through
 
     case NCIState::RFST_IDLE:
+      if (this->nci_state_error_ == NCIState::RFST_DISCOVERY) {
+        this->stop_discovery_();
+      }
+
       if (this->config_refresh_pending_) {
         this->refresh_core_config_();
       }
@@ -586,7 +592,8 @@ void PN7160::nci_fsm_transition_() {
       }
 
       if (this->start_discovery_() != nfc::STATUS_OK) {
-        ESP_LOGE(TAG, "Failed to start discovery");
+        ESP_LOGV(TAG, "Failed to start discovery");
+        this->nci_fsm_set_error_state_(NCIState::RFST_DISCOVERY);
       } else {
         this->nci_fsm_set_state_(NCIState::RFST_DISCOVERY);
       }
@@ -623,7 +630,19 @@ void PN7160::nci_fsm_transition_() {
 void PN7160::nci_fsm_set_state_(NCIState new_state) {
   ESP_LOGVV(TAG, "nci_fsm_set_state_(%u)", new_state);
   this->nci_state_ = new_state;
+  this->nci_state_error_ = NCIState::NONE;
+  this->error_count_ = 0;
   this->last_nci_state_change_ = millis();
+}
+
+bool PN7160::nci_fsm_set_error_state_(NCIState new_state) {
+  ESP_LOGVV(TAG, "nci_fsm_set_error_state_(%u)", new_state);
+  this->nci_state_error_ = new_state;
+  if (this->error_count_++ > NFCC_MAX_ERROR_COUNT) {
+    ESP_LOGE(TAG, "Too many errors transitioning to state %u; resetting NFCC", this->nci_state_error_);
+    this->nci_fsm_set_state_(NCIState::NFCC_RESET);
+  }
+  return this->error_count_ > NFCC_MAX_ERROR_COUNT;
 }
 
 void PN7160::process_message_() {
@@ -670,7 +689,6 @@ void PN7160::process_message_() {
                   this->nci_fsm_set_state_(NCIState::RFST_W4_HOST_SELECT);
                   if (!this->discovered_endpoint_.empty()) {
                     this->erase_tag_(this->selecting_endpoint_);
-                    // this->discovered_endpoint_.erase(this->discovered_endpoint_.begin() + this->selecting_endpoint_);
                   }
                 } else {
                   this->stop_discovery_();

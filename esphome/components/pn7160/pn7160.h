@@ -3,6 +3,7 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/nfc/automation.h"
 #include "esphome/components/nfc/nci_core.h"
+#include "esphome/components/nfc/nci_message.h"
 #include "esphome/components/nfc/nfc.h"
 #include "esphome/components/spi/spi.h"
 #include "esphome/core/component.h"
@@ -23,6 +24,7 @@ static const uint16_t NFCC_INIT_TIMEOUT = 50;
 static const uint16_t NFCC_TAG_WRITE_TIMEOUT = 15;
 
 static const uint8_t NFCC_MAX_COMM_FAILS = 3;
+static const uint8_t NFCC_MAX_ERROR_COUNT = 10;
 
 static const uint8_t TDD_SPI_READ = 0xFF;
 static const uint8_t TDD_SPI_WRITE = 0x0A;
@@ -243,6 +245,8 @@ class PN7160 : public Component,
   void nci_fsm_transition_();
   /// set new controller state
   void nci_fsm_set_state_(NCIState new_state);
+  /// setting controller to this state caused an error; returns true if too many errors/failures
+  bool nci_fsm_set_error_state_(NCIState new_state);
   /// parse & process incoming messages from the NFCC
   void process_message_();
   void process_rf_intf_activated_oid_(nfc::NciMessage &rx);
@@ -290,6 +294,7 @@ class PN7160 : public Component,
   bool listening_enabled_{false};
   bool polling_enabled_{true};
 
+  uint8_t error_count_{0};
   uint8_t fail_count_{0};
   uint32_t last_nci_state_change_{0};
   uint8_t selecting_endpoint_{0};
@@ -312,6 +317,7 @@ class PN7160 : public Component,
 
   CardEmulationState ce_state_{CardEmulationState::CARD_EMU_IDLE};
   NCIState nci_state_{NCIState::NFCC_RESET};
+  NCIState nci_state_error_{NCIState::NONE};
 
   std::shared_ptr<nfc::NdefMessage> card_emulation_message_;
   std::shared_ptr<nfc::NdefMessage> next_task_message_to_write_;
